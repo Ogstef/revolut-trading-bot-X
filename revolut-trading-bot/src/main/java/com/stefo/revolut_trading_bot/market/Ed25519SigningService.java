@@ -5,15 +5,10 @@ import com.stefo.revolut_trading_bot.exception.SigningException;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
-import org.bouncycastle.crypto.util.PrivateKeyFactory;
-import org.bouncycastle.openssl.PEMParser;
 import org.springframework.stereotype.Service;
 
-import java.io.FileReader;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
@@ -27,32 +22,28 @@ public class Ed25519SigningService {
 
     @PostConstruct
     public void init() {
-        String keyPath = apiConfig.getPrivateKeyPath();
-        if (keyPath == null || keyPath.isBlank()) {
-            log.warn("No private key path configured — authenticated endpoints will not work");
+        String keyHex = apiConfig.getPrivateKeyHex();
+        if (keyHex == null || keyHex.isBlank()) {
+            log.warn("No private key configured — authenticated endpoints will not work");
             return;
         }
         try {
-            loadPrivateKey(keyPath);
-            log.info("Ed25519 private key loaded successfully");
+            byte[] keyBytes = hexToBytes(keyHex);
+            // NaCl sign secret key is 64 bytes: first 32 = seed, last 32 = public key
+            // BouncyCastle Ed25519PrivateKeyParameters takes the 32-byte seed
+            byte[] seed = keyBytes.length == 64 ? java.util.Arrays.copyOf(keyBytes, 32) : keyBytes;
+            privateKey = new Ed25519PrivateKeyParameters(seed, 0);
+            log.info("Ed25519 private key loaded successfully from hex");
         } catch (Exception e) {
-            log.error("Failed to load Ed25519 private key from {}", keyPath, e);
+            log.error("Failed to load Ed25519 private key", e);
         }
     }
 
-    private void loadPrivateKey(String path) throws IOException {
-        try (PEMParser parser = new PEMParser(new FileReader(path))) {
-            Object parsed = parser.readObject();
-            PrivateKeyInfo keyInfo;
-            if (parsed instanceof PrivateKeyInfo info) {
-                keyInfo = info;
-            } else {
-                throw new IOException("Unexpected PEM object type: " + parsed.getClass().getName());
-            }
-            privateKey = (Ed25519PrivateKeyParameters) PrivateKeyFactory.createKey(keyInfo);
-        }
-    }
-
+    /**
+     * Signs the message exactly like the Postman script:
+     * message = timestamp + METHOD + PATH + QUERY + BODY
+     * signature = base64(ed25519_sign_detached(message, privateKey))
+     */
     public String sign(String message) {
         if (privateKey == null) {
             throw new SigningException("Private key not loaded", null);
@@ -69,6 +60,11 @@ public class Ed25519SigningService {
         }
     }
 
+    /**
+     * Builds the message string exactly as Postman does:
+     * timestamp + METHOD + PATH + QUERY + BODY
+     * (no separators, concatenated directly)
+     */
     public String buildSignatureMessage(long timestamp, String method, String path,
                                          String queryString, String body) {
         StringBuilder sb = new StringBuilder();
@@ -86,5 +82,15 @@ public class Ed25519SigningService {
 
     public boolean isKeyLoaded() {
         return privateKey != null;
+    }
+
+    private static byte[] hexToBytes(String hex) {
+        int len = hex.length();
+        byte[] data = new byte[len / 2];
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                    + Character.digit(hex.charAt(i + 1), 16));
+        }
+        return data;
     }
 }
