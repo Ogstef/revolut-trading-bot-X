@@ -1,9 +1,3 @@
-# Claude Code Prompt — Revolut X Trading Bot
-
-Copy everything below and paste it into Claude Code:
-
----
-
 I'm building an automated cryptocurrency trading bot in Java with Spring Boot that uses the Revolut X REST API. The project is already initialized with Spring Boot 4.0.5, Java 21, and all dependencies are in pom.xml. I need you to help me build this incrementally, phase by phase.
 
 ## Project Context
