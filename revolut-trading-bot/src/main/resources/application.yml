@@ -58,3 +58,7 @@ revolut:
     api-key: ${REVOLUT_API_KEY:}
     private-key-path: ${REVOLUT_PRIVATE_KEY_PATH:}
     rate-limit-per-minute: 1000
+
+
+server:
+  port: 8089
