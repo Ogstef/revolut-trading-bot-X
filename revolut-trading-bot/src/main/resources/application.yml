@@ -1,0 +1,60 @@
+spring:
+  application:
+    name: revolut-trading-bot
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/trading_bot
+    username: trading_bot
+    password: secret
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: trading
+        format_sql: true
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    schemas: trading
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+trading:
+  pair: BTC-EUR
+  mode: PAPER
+  polling-interval-seconds: 30
+  strategy:
+    ema-short-period: 9
+    ema-long-period: 21
+    rsi-period: 14
+    rsi-overbought: 70
+    rsi-oversold: 30
+  risk:
+    max-position-pct: 2.0
+    max-concurrent-positions: 3
+    max-daily-loss-pct: 5.0
+    max-consecutive-losses: 5
+    take-profit-pct: 5.0
+    stop-loss-pct: 3.0
+
+revolut:
+  api:
+    base-url: https://revx.revolut.com/api/1.0
+    api-key: ${REVOLUT_API_KEY:}
+    private-key-path: ${REVOLUT_PRIVATE_KEY_PATH:}
+    rate-limit-per-minute: 1000
