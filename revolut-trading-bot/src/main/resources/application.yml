@@ -3,7 +3,7 @@ spring:
     name: revolut-trading-bot
 
   datasource:
-    url: jdbc:postgresql://localhost:5433/trading_bot
+    url: jdbc:postgresql://localhost:5432/trading_bot
     username: trading_bot
     password: secret
     driver-class-name: org.postgresql.Driver
