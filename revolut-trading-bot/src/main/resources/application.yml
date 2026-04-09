@@ -56,7 +56,7 @@ revolut:
   api:
     base-url: https://revx.revolut.com/api/1.0
     api-key: ${REVOLUT_API_KEY:}
-    private-key-hex: ${REVOLUT_PRIVATE_KEY_HEX:}
+    private-key-path: ${REVOLUT_PRIVATE_KEY_PATH:}
     rate-limit-per-minute: 1000
 
 

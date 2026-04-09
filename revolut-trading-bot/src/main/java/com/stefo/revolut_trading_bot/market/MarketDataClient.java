@@ -46,7 +46,7 @@ public class MarketDataClient {
 
     public List<BalanceResponse> getBalances() {
         log.debug("Fetching account balances");
-        return apiClient.getAuthenticated("/balance", null,
+        return apiClient.getAuthenticated("/balances", null,
                 new TypeReference<>() {});
     }
 

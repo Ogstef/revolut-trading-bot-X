@@ -16,7 +16,7 @@ public class RevolutApiConfig {
 
     private String apiKey;
 
-    private String privateKeyHex;
+    private String privateKeyPath;
 
     @Positive
     private int rateLimitPerMinute;

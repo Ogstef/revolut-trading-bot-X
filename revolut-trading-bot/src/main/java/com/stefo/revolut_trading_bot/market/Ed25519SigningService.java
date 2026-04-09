@@ -5,11 +5,18 @@ import com.stefo.revolut_trading_bot.exception.SigningException;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
+import org.bouncycastle.openssl.PEMKeyPair;
+import org.bouncycastle.openssl.PEMParser;
+import org.bouncycastle.openssl.jcajce.JcaPEMKeyConverter;
 import org.springframework.stereotype.Service;
 
+import java.io.FileReader;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.interfaces.EdECPrivateKey;
 import java.util.Base64;
 
 @Slf4j
@@ -22,27 +29,23 @@ public class Ed25519SigningService {
 
     @PostConstruct
     public void init() {
-        String keyHex = apiConfig.getPrivateKeyHex();
-        if (keyHex == null || keyHex.isBlank()) {
-            log.warn("No private key configured — authenticated endpoints will not work");
+        String keyPath = apiConfig.getPrivateKeyPath();
+        if (keyPath == null || keyPath.isBlank()) {
+            log.warn("No private key path configured — authenticated endpoints will not work");
             return;
         }
-        try {
-            byte[] keyBytes = hexToBytes(keyHex);
-            // NaCl sign secret key is 64 bytes: first 32 = seed, last 32 = public key
-            // BouncyCastle Ed25519PrivateKeyParameters takes the 32-byte seed
-            byte[] seed = keyBytes.length == 64 ? java.util.Arrays.copyOf(keyBytes, 32) : keyBytes;
-            privateKey = new Ed25519PrivateKeyParameters(seed, 0);
-            log.info("Ed25519 private key loaded successfully from hex");
+        try (PEMParser parser = new PEMParser(new FileReader(keyPath))) {
+            Object obj = parser.readObject();
+            privateKey = toEd25519Params(obj);
+            log.info("Ed25519 private key loaded from {}", keyPath);
         } catch (Exception e) {
-            log.error("Failed to load Ed25519 private key", e);
+            log.error("Failed to load Ed25519 private key from {}", keyPath, e);
         }
     }
 
     /**
-     * Signs the message exactly like the Postman script:
-     * message = timestamp + METHOD + PATH + QUERY + BODY
-     * signature = base64(ed25519_sign_detached(message, privateKey))
+     * Signs the message exactly as the Revolut API expects:
+     * message = timestamp + METHOD + PATH + QUERY + BODY (no separators)
      */
     public String sign(String message) {
         if (privateKey == null) {
@@ -60,13 +63,8 @@ public class Ed25519SigningService {
         }
     }
 
-    /**
-     * Builds the message string exactly as Postman does:
-     * timestamp + METHOD + PATH + QUERY + BODY
-     * (no separators, concatenated directly)
-     */
     public String buildSignatureMessage(long timestamp, String method, String path,
-                                         String queryString, String body) {
+                                        String queryString, String body) {
         StringBuilder sb = new StringBuilder();
         sb.append(timestamp);
         sb.append(method.toUpperCase());
@@ -84,13 +82,27 @@ public class Ed25519SigningService {
         return privateKey != null;
     }
 
-    private static byte[] hexToBytes(String hex) {
-        int len = hex.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
-                    + Character.digit(hex.charAt(i + 1), 16));
+    /**
+     * Handles both PKCS#8 ("BEGIN PRIVATE KEY") and legacy OpenSSL ("BEGIN EC/Ed PRIVATE KEY")
+     * PEM formats that BouncyCastle's PEMParser can produce.
+     */
+    private Ed25519PrivateKeyParameters toEd25519Params(Object pemObject) throws IOException {
+        PrivateKeyInfo keyInfo;
+        if (pemObject instanceof PrivateKeyInfo info) {
+            keyInfo = info;
+        } else if (pemObject instanceof PEMKeyPair pair) {
+            keyInfo = pair.getPrivateKeyInfo();
+        } else {
+            throw new SigningException(
+                    "Unsupported PEM object type: " + pemObject.getClass().getSimpleName(), null);
         }
-        return data;
+
+        // BouncyCastle's JcaPEMKeyConverter gives us a JCA PrivateKey; we then
+        // extract the raw 32-byte seed that Ed25519PrivateKeyParameters needs.
+        JcaPEMKeyConverter converter = new JcaPEMKeyConverter();
+        EdECPrivateKey jcaKey = (EdECPrivateKey) converter.getPrivateKey(keyInfo);
+        byte[] seed = jcaKey.getBytes()
+                .orElseThrow(() -> new SigningException("EdEC private key bytes not available", null));
+        return new Ed25519PrivateKeyParameters(seed, 0);
     }
 }

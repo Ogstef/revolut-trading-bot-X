@@ -14,6 +14,7 @@ import okhttp3.ResponseBody;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -55,7 +56,8 @@ public class RevolutApiClient {
         String url = buildUrl(path, queryString);
         long timestamp = System.currentTimeMillis();
 
-        String message = signingService.buildSignatureMessage(timestamp, "GET", path, queryString, null);
+        String fullPath = fullPath(path);
+        String message = signingService.buildSignatureMessage(timestamp, "GET", fullPath, queryString, null);
         String signature = signingService.sign(message);
 
         Request request = new Request.Builder()
@@ -73,7 +75,7 @@ public class RevolutApiClient {
             String bodyJson = objectMapper.writeValueAsString(body);
             long timestamp = System.currentTimeMillis();
 
-            String message = signingService.buildSignatureMessage(timestamp, "POST", path, null, bodyJson);
+            String message = signingService.buildSignatureMessage(timestamp, "POST", fullPath(path), null, bodyJson);
             String signature = signingService.sign(message);
 
             Request request = new Request.Builder()
@@ -92,7 +94,7 @@ public class RevolutApiClient {
     public void deleteAuthenticated(String path) {
         long timestamp = System.currentTimeMillis();
 
-        String message = signingService.buildSignatureMessage(timestamp, "DELETE", path, null, null);
+        String message = signingService.buildSignatureMessage(timestamp, "DELETE", fullPath(path), null, null);
         String signature = signingService.sign(message);
 
         Request request = new Request.Builder()
@@ -106,7 +108,7 @@ public class RevolutApiClient {
     }
 
     private <T> T execute(Request request, TypeReference<T> typeRef) {
-        log.debug("API request: {} {}", request.method(), request.url());
+        log.info("API request: {} {}", request.method(), request.url());
         try (Response response = httpClient.newCall(request).execute()) {
             ResponseBody responseBody = response.body();
             String bodyString = responseBody != null ? responseBody.string() : "";
@@ -134,6 +136,11 @@ public class RevolutApiClient {
         } catch (IOException e) {
             throw new ApiException("API call failed: " + e.getMessage(), e);
         }
+    }
+
+    /** Returns the path component of the base URL + the endpoint path, e.g. /api/1.0/balance */
+    private String fullPath(String path) {
+        return URI.create(apiConfig.getBaseUrl()).getPath() + path;
     }
 
     private String buildUrl(String path, String queryString) {
