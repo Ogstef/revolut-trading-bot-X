@@ -1,148 +1,271 @@
-I'm building an automated cryptocurrency trading bot in Java with Spring Boot that uses the Revolut X REST API. The project is already initialized with Spring Boot 4.0.5, Java 21, and all dependencies are in pom.xml. I need you to help me build this incrementally, phase by phase.
+# Revolut X Trading Bot — Project Blueprint
 
-## Project Context
+## Overview
 
-- **Group**: com.stefanos
-- **Artifact**: revolut-trading-bot
-- **Base package**: com.stefanos.revolut_trading_bot
-- **Database**: PostgreSQL 17 running locally in Docker on port 5432, database name `trading_bot`, user `trading_bot`, password `secret`
-- **Trading mode**: PAPER only for now (simulate trades, never place real orders)
-- **Trading pair**: BTC-EUR (single pair for v1)
-- **Strategy**: EMA(9)/EMA(21) crossover with RSI(14) filter
-- **Take Profit**: 5%, **Stop Loss**: 3%
+Automated cryptocurrency trading bot in Java/Spring Boot that uses the Revolut X REST API. Starts in PAPER mode (simulated trades), validates the strategy, then optionally switches to LIVE mode with real money.
 
-## Dependencies already in pom.xml
+## Tech Stack
 
-From Spring Initializr: Spring Web, Spring Data JPA, PostgreSQL Driver, Spring Boot Actuator, Validation, Flyway Migration, Lombok
+- **Java 21**, **Spring Boot 4.0.5**, **Maven**
+- **PostgreSQL 16** (Docker, port 5432, db: `trading_bot`, user: `trading_bot`, pw: `secret`)
+- **Ta4j 0.16** — technical analysis indicators (EMA, RSI, MACD, etc.)
+- **BouncyCastle 1.83** — Ed25519 request signing
+- **OkHttp 4.12** — HTTP client for Revolut X API
+- **Flyway** — database migrations
+- **MapStruct 1.6.3** — DTO/entity mapping
+- **Lombok** — boilerplate reduction
+- **Spock 2.4-M4 + Groovy** — testing framework (team standard)
+- **Base package**: `com.stefo.revolut_trading_bot`
 
-Manually added: Ta4j (org.ta4j:ta4j-core:0.16), BouncyCastle (org.bouncycastle:bcprov-jdk18on:1.83), OkHttp (com.squareup.okhttp3:okhttp:4.12.0), MapStruct (org.mapstruct:mapstruct:1.6.3 + processor), Spock Framework (org.spockframework:spock-core:2.4-M4-groovy-4.0 + spock-spring)
+## Revolut X API
 
-## Revolut X API Details
+### Base URL
+`https://revx.revolut.com/api/1.0`
 
-- **Base URL**: `https://revx.revolut.com/api/1.0`
-- **Authentication**: Custom Ed25519 signature scheme. Every authenticated request needs 3 headers:
-  - `X-Revx-API-Key`: 64-character alphanumeric API key (from env var `REVOLUT_API_KEY`)
-  - `X-Revx-Timestamp`: Unix epoch timestamp in milliseconds
-  - `X-Revx-Signature`: Base64-encoded Ed25519 signature of the message string
-- **Message to sign**: Concatenate WITHOUT separators: `{timestamp}{HTTP_METHOD}{path}{queryString}{body}`
-  - Example: `1765360896219POST/api/1.0/orders{"client_order_id":"...","symbol":"BTC-USD","side":"BUY","order_configuration":{"limit":{"base_size":"0.1","price":"90000.1"}}}`
-  - For GET requests with no body, just omit the body part
-  - Query string should NOT include the `?` prefix
-- **Private key**: Ed25519 PEM file, path from env var `REVOLUT_PRIVATE_KEY_PATH`
-- **Rate limit**: 1000 requests per minute for order endpoints
+### Authentication
+Custom Ed25519 signature scheme on every authenticated request.
 
-### Key Endpoints
+**Headers required:**
+- `X-Revx-API-Key` — 64-char alphanumeric key (env var: `REVOLUT_API_KEY`)
+- `X-Revx-Timestamp` — Unix epoch milliseconds
+- `X-Revx-Signature` — Base64-encoded Ed25519 signature
 
-Public (no auth):
-- `GET /public/symbols` — available trading pairs
-- `GET /public/trades?symbol=BTC-EUR` — latest 100 market trades
-- `GET /public/order-book?symbol=BTC-EUR` — bids/asks (5 levels)
+**Message to sign** (concatenate WITHOUT separators):
+```
+{timestamp}{HTTP_METHOD}{path}{queryString}{body}
+```
 
-Authenticated:
-- `GET /market-data/candles?symbol=BTC-EUR&interval=15m` — historical OHLCV candles
-- `GET /balance` — account balances
-- `POST /orders` — place order (limit or market)
-- `GET /orders/active` — open orders
-- `DELETE /orders/{id}` — cancel order
-- `GET /trades` — client trade history (fills)
+- Path starts from `/api` (e.g., `/api/1.0/orders/active`)
+- Query string excludes the `?` prefix
+- Body is minified JSON (empty string for GET)
+- Private key: Ed25519 PEM file (env var: `REVOLUT_PRIVATE_KEY_PATH`)
 
-### Order Placement Body Structure
+**Example:**
+```
+1765360896219POST/api/1.0/orders{"client_order_id":"uuid","symbol":"BTC-USD","side":"BUY","order_configuration":{"limit":{"base_size":"0.1","price":"90000.1"}}}
+```
+
+### Endpoints
+
+**Public (no auth):**
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/public/symbols` | Available trading pairs |
+| GET | `/public/trades?symbol=BTC-EUR` | Latest 100 market trades |
+| GET | `/public/order-book?symbol=BTC-EUR` | Bids/asks (5 levels) |
+
+**Authenticated:**
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/market-data/candles?symbol=BTC-EUR&interval=15m` | Historical OHLCV candles |
+| GET | `/market-data/order-book?symbol=BTC-EUR` | Full order book |
+| GET | `/balance` | Account balances |
+| POST | `/orders` | Place order (limit/market) |
+| GET | `/orders/active` | Open orders |
+| DELETE | `/orders/{id}` | Cancel order |
+| GET | `/trades` | Client trade history (fills) |
+
+**Rate limit:** 1000 requests/minute for order endpoints.
+
+### Order Body Structures
+
+**Market order:**
 ```json
 {
   "client_order_id": "uuid",
   "symbol": "BTC-EUR",
   "side": "BUY",
   "order_configuration": {
-    "market": {
-      "quote_size": "100.00"
-    }
+    "market": { "quote_size": "100.00" }
   }
 }
 ```
 
-For limit orders, replace `market` with:
+**Limit order:**
 ```json
-"limit": {
-  "base_size": "0.001",
-  "price": "62000.00"
+{
+  "client_order_id": "uuid",
+  "symbol": "BTC-EUR",
+  "side": "BUY",
+  "order_configuration": {
+    "limit": { "base_size": "0.001", "price": "62000.00" }
+  }
 }
 ```
 
-## Architecture Overview
+---
+
+## Architecture
 
 ### Package Structure
 ```
-com.stefanos.revoluttradingbot/
-├── config/          # @ConfigurationProperties classes
+com.stefo.revolut_trading_bot/
+├── config/          # @ConfigurationProperties (TradingConfig, RevolutApiConfig)
 ├── model/
 │   ├── entity/      # JPA entities (Trade, Position, Candlestick, SignalLog)
-│   ├── dto/         # DTOs (OrderRequest, OrderResult, TradingStats, etc.)
+│   ├── dto/         # DTOs (OrderRequest, OrderResult, TradingStats, PortfolioSnapshot)
 │   └── enums/       # SignalType, OrderSide, OrderStatus, TradingPair, TradingMode
-├── market/          # MarketDataClient (API calls), MarketDataService (buffering + BarSeries)
-├── strategy/        # Strategy interface, Signal record, SignalEngine, impl/EmaCrossoverStrategy
+├── market/          # MarketDataClient (API + signing), MarketDataService (BarSeries)
+├── strategy/        # Strategy interface, Signal record, SignalEngine, impl/
 ├── risk/            # RiskManager, TakeProfitStopLossManager
 ├── execution/       # OrderExecutionService (router), PaperTradingService, LiveTradingService
 ├── portfolio/       # PortfolioService, TradeService
 ├── repository/      # Spring Data JPA repositories
 ├── scheduler/       # TradingLoop (@Scheduled orchestrator)
 ├── controller/      # DashboardController (REST monitoring API)
-├── alert/           # AlertService (SLF4J logging for v1)
+├── alert/           # AlertService (SLF4J for v1, Telegram later)
 └── exception/       # Custom exceptions
 ```
 
-### Database Schema (trading schema)
-4 tables in a `trading` schema:
-1. **positions** — id, pair, side, entry_price, quantity, take_profit, stop_loss, status (OPEN/CLOSED), opened_at, closed_at, signal_reason
+### Database Schema
+
+PostgreSQL, schema: `trading`. All monetary fields: `DECIMAL(18,8)`. Managed by Flyway.
+
+**Tables:**
+1. **positions** — id, pair, side, entry_price, quantity, take_profit, stop_loss, status (OPEN/CLOSED), opened_at, closed_at, signal_reason, created_at, updated_at
 2. **trades** — id, position_id (FK), pair, side, entry_price, exit_price, quantity, pnl, pnl_pct, exit_reason (TP_HIT/SL_HIT/SIGNAL_EXIT/MANUAL), executed_at, trading_mode (PAPER/LIVE)
-3. **candlesticks** — id, pair, interval, open/high/low/close prices, volume, timestamp (unique constraint on pair+interval+timestamp)
+3. **candlesticks** — id, pair, interval, open/high/low/close_price, volume, timestamp. Unique constraint on (pair, interval, timestamp)
 4. **signal_logs** — id, pair, signal_type, confidence, reason, ema_short, ema_long, rsi, current_price, created_at
 
-All monetary fields use DECIMAL(18,8). Use Flyway migrations in `src/main/resources/db/migration/`.
+### Trading Configuration (application.yml)
 
-### Strategy Logic (EmaCrossoverStrategy)
-Using Ta4j library:
-- **BUY signal**: EMA(9) crosses above EMA(21) AND RSI(14) is between 30-70 AND price is above EMA(21)
-- **SELL signal**: EMA(9) crosses below EMA(21) OR RSI(14) > 70 (overbought)
-- **HOLD**: everything else
+```yaml
+trading:
+  mode: PAPER
+  pair: BTC-EUR
+  poll-interval-seconds: 30
+  candlestick-interval: 15m
+  strategy:
+    short-ema-period: 9
+    long-ema-period: 21
+    rsi-period: 14
+    rsi-overbought: 70
+    rsi-oversold: 30
+  risk:
+    take-profit-pct: 5.0
+    stop-loss-pct: 3.0
+    max-position-pct: 2.0
+    max-concurrent-positions: 3
+    max-daily-loss-pct: 5.0
+    consecutive-loss-limit: 5
+```
+
+---
+
+## V1 Strategy — EMA Crossover + RSI Filter
+
+Using Ta4j library with configurable parameters.
+
+**BUY signal (all conditions must be true):**
+- EMA(9) crosses above EMA(21)
+- RSI(14) between 30 and 70 (not overbought/oversold)
+- Current price above EMA(21) (confirms uptrend)
+
+**SELL signal (any condition):**
+- EMA(9) crosses below EMA(21) (momentum reversal)
+- RSI(14) > 70 (overbought)
+
+**HOLD:** Everything else.
 
 ### Risk Management Rules
-- Max 2% of portfolio per position
-- Max 3 concurrent positions
-- Max 5% daily loss → circuit breaker trips, bot stops trading
-- Max 5 consecutive losses → circuit breaker trips
-- TP = entry_price × 1.05, SL = entry_price × 0.97
+- Max 2% of portfolio per trade
+- Max 3 concurrent open positions
+- Circuit breaker: stop trading if daily loss exceeds 5%
+- Circuit breaker: stop trading after 5 consecutive losses
+- Take Profit: entry_price × 1.05 (5%)
+- Stop Loss: entry_price × 0.97 (3%)
 
-### Trading Loop (every 30 seconds via @Scheduled)
-1. Fetch latest candles from Revolut X API
-2. Build/update Ta4j BarSeries
-3. Run SignalEngine → get BUY/SELL/HOLD
-4. If BUY/SELL → validate through RiskManager → calculate position size → execute via PaperTradingService
-5. Monitor open positions against current price → check TP/SL
-6. Log everything
+### Trading Loop (every 30s via @Scheduled)
+1. `MarketDataService.fetchLatestCandles("BTC-EUR", "15m")`
+2. Build/update Ta4j `BarSeries`
+3. `SignalEngine.evaluate("BTC-EUR")` → BUY/SELL/HOLD
+4. If BUY/SELL → `RiskManager.validateTrade(signal)` → position sizing → execute
+5. Monitor all open positions: check current price against TP/SL
+6. Close positions that hit TP/SL, record trades
+7. Log everything via `AlertService`
 
-### Configuration (application.yml)
-Use @ConfigurationProperties with prefix `trading` for strategy params, risk params, polling interval, and trading mode. Use `revolut` prefix for API config. All secrets via environment variables.
+---
 
-## What I Want You To Build — Phase 1
+## Build Phases
 
-Start with the foundation. Build these in order:
+### Phase 1 — Foundation ✅
+- application.yml with all config
+- Flyway migration V1__init_schema.sql (4 tables + indexes)
+- Enums: SignalType, OrderSide, OrderStatus, TradingPair, TradingMode
+- JPA Entities: Position, Trade, Candlestick, SignalLog
+- Spring Data JPA Repositories with custom queries
+- Config classes: TradingConfig, RevolutApiConfig as @ConfigurationProperties
+- **Milestone:** App boots, Flyway runs, tables created
 
-1. **application.yml** with all config (datasource, JPA, trading config, revolut API config, actuator)
-2. **Flyway migration** V1__init_schema.sql with all 4 tables + indexes
-3. **Enums**: SignalType, OrderSide, OrderStatus, TradingPair, TradingMode
-4. **Entities**: Position, Trade, Candlestick, SignalLog (with proper JPA annotations, Lombok)
-5. **Repositories**: Spring Data JPA interfaces with custom query methods we'll need
-6. **Config classes**: TradingConfig and RevolutApiConfig as @ConfigurationProperties
+### Phase 2 — API Client & Auth ✅
+- RevolutApiSigner — Ed25519 message signing (load PEM, construct message, sign, base64 encode)
+- MarketDataClient — OkHttp-based client with signing interceptor
+- Handles all Revolut X endpoints (public + authenticated)
+- Rate limiting awareness
+- **Milestone:** Can fetch live BTC-EUR data from Revolut X
 
-After this phase is done and the app boots cleanly with Flyway running, I'll ask you for Phase 2 (MarketDataClient with Ed25519 signing).
+### Phase 3 — Signal Engine
+- MarketDataService — fetches candles, converts to Ta4j BarSeries, persists to DB
+- Strategy interface: `Signal analyze(BarSeries series)` + `String getName()`
+- EmaCrossoverStrategy — implements the EMA(9/21) + RSI(14) logic using Ta4j
+- Signal record: type, pair, confidence, reason, timestamp
+- SignalEngine — orchestrator that runs strategies and logs all signals to DB
+- **Milestone:** Can compute signals from real market data
 
-## Code Style Preferences
-- Use Lombok (@Data, @Builder, @NoArgsConstructor, @AllArgsConstructor) on entities
-- Use Java records for DTOs and value objects where appropriate
-- Methods should be under 15 lines, single responsibility
-- Use BigDecimal for all monetary values, never double/float
-- Comprehensive SLF4J logging (use @Slf4j from Lombok)
-- Always use Optional returns from repositories where applicable
-- Include proper validation annotations on config classes (@NotNull, @Positive, etc.)
+### Phase 4 — Risk Management & Paper Trading
+- RiskManager — validates trades against all risk rules, calculates position size
+- TakeProfitStopLossManager — calculates TP/SL prices, checks exit conditions
+- PaperTradingService — simulates order fills using current market price, tracks virtual balance
+- OrderExecutionService — routes to Paper or Live based on config
+- **Milestone:** Full paper trade execution from signal to simulated fill
 
-Build Phase 1 now. Create all files, make sure it compiles, and verify Flyway can run the migration.
+### Phase 5 — Trading Loop & Portfolio
+- TradingLoop — @Scheduled main heartbeat, orchestrates the full cycle
+- PortfolioService — tracks open positions, calculates PnL
+- TradeService — records completed trades, computes win rate and statistics
+- Open position monitoring — checks TP/SL on every cycle
+- Circuit breaker logic — stops bot on excessive losses
+- **Milestone:** Bot runs autonomously in paper mode
+
+### Phase 6 — Monitoring Dashboard
+- DashboardController REST API:
+    - `GET /api/status` — bot status, current mode, circuit breaker state
+    - `GET /api/positions` — open positions with live PnL
+    - `GET /api/trades` — trade history with stats
+    - `GET /api/stats` — win rate, total PnL, average trade duration
+    - `GET /api/pnl` — daily/weekly/monthly PnL breakdown
+    - `POST /api/config` — update trading parameters at runtime
+    - `POST /api/emergency-stop` — immediately stop trading
+- AlertService — SLF4J structured logging (v1), Telegram webhook (v2)
+- **Milestone:** Can monitor and control bot remotely via REST
+
+### Phase 7 — Backtest & Go Live
+- Backtest mode — replay historical candles through the strategy, compute hypothetical results
+- Run paper mode for 2-4 weeks, analyze results
+- LiveTradingService — real Revolut X order placement via POST /orders
+- Start with absolute minimum position sizes
+- **Milestone:** Real trades with real money
+
+---
+
+## Code Style
+
+- **Lombok**: @Data, @Builder, @NoArgsConstructor, @AllArgsConstructor on entities. @Slf4j everywhere.
+- **Records**: Use Java records for DTOs, value objects, and Signals where appropriate.
+- **Methods**: Under 15 lines, single responsibility.
+- **Money**: Always BigDecimal, never double/float.
+- **Logging**: Comprehensive SLF4J logging. Log every signal, trade decision, API call, and error.
+- **Repositories**: Use Optional returns where applicable.
+- **Validation**: @NotNull, @Positive, etc. on config classes.
+- **Testing**: Spock/Groovy framework. Write tests for strategy logic and risk manager.
+- **Patterns**: Strategy pattern for trading strategies. Factory pattern where applicable. Keep services focused and composable.
+- **Error handling**: Custom exceptions (InsufficientBalanceException, ApiRateLimitException, CircuitBreakerTrippedException). Never swallow exceptions silently.
+- **Naming**: Follow existing Spring Boot conventions. Repositories end in Repository, services in Service, etc.
+
+## Important Safety Rules
+
+- **NEVER place real orders unless trading.mode is explicitly set to LIVE**
+- **NEVER store API keys or private keys in code or yml** — always environment variables
+- **NEVER risk more than max-position-pct per trade**
+- **ALWAYS respect the circuit breaker** — if tripped, no trades until manually reset
+- **ALWAYS log before executing** — every order attempt must be logged before API call
