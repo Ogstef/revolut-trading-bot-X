@@ -38,6 +38,7 @@ trading:
   pair: BTC-EUR
   mode: PAPER
   polling-interval-seconds: 30
+  paper-balance: 10000.00   # simulated EUR balance for PAPER mode — change this to test different sizes
   strategy:
     ema-short-period: 9
     ema-long-period: 21
@@ -62,3 +63,9 @@ revolut:
 
 server:
   port: 8089
+
+logging:
+  level:
+    com.stefo.revolut_trading_bot: INFO    # your code
+    org.springframework: WARN              # suppress Spring noise
+    org.hibernate: WARN                    # suppress SQL noise

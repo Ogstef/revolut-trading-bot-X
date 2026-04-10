@@ -1,23 +1,37 @@
 package com.stefo.revolut_trading_bot.controller;
 
 import com.stefo.revolut_trading_bot.config.RevolutApiConfig;
+import com.stefo.revolut_trading_bot.execution.OrderExecutionService;
 import com.stefo.revolut_trading_bot.market.Ed25519SigningService;
 import com.stefo.revolut_trading_bot.market.MarketDataClient;
+import com.stefo.revolut_trading_bot.market.MarketDataService;
+import com.stefo.revolut_trading_bot.portfolio.PortfolioService;
+import com.stefo.revolut_trading_bot.portfolio.PortfolioSnapshot;
+import com.stefo.revolut_trading_bot.portfolio.TradingStats;
+import com.stefo.revolut_trading_bot.portfolio.TradeService;
 import com.stefo.revolut_trading_bot.model.dto.BalanceResponse;
 import com.stefo.revolut_trading_bot.model.dto.CandleResponse;
 import com.stefo.revolut_trading_bot.model.dto.OrderBookResponse;
 import com.stefo.revolut_trading_bot.model.dto.TickerResponse;
+import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.entity.SignalLog;
+import com.stefo.revolut_trading_bot.model.entity.Trade;
+import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
+import com.stefo.revolut_trading_bot.repository.PositionRepository;
+import com.stefo.revolut_trading_bot.repository.TradeRepository;
+import com.stefo.revolut_trading_bot.risk.RiskManager;
 import com.stefo.revolut_trading_bot.strategy.Signal;
 import com.stefo.revolut_trading_bot.strategy.SignalEngine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -38,9 +52,17 @@ import java.util.Map;
 public class TestController {
 
     private final MarketDataClient marketDataClient;
+    private final MarketDataService marketDataService;
     private final Ed25519SigningService signingService;
     private final RevolutApiConfig apiConfig;
     private final SignalEngine signalEngine;
+    private final RiskManager riskManager;
+    private final OrderExecutionService orderExecutionService;
+    private final PortfolioService portfolioService;
+    private final TradeService tradeService;
+    private final PositionRepository positionRepository;
+    private final TradeRepository tradeRepository;
+    private final com.stefo.revolut_trading_bot.config.TradingConfig tradingConfig;
 
     // ─── Infrastructure ───────────────────────────────────────────────────────
 
@@ -189,6 +211,105 @@ public class TestController {
             @RequestParam(defaultValue = "20") int limit) {
         log.info("TEST: fetching last {} signal logs", limit);
         return ResponseEntity.ok(signalEngine.recentSignals(limit));
+    }
+
+    // ─── Risk Manager ─────────────────────────────────────────────────────────
+
+    /**
+     * Shows current risk metrics: open positions, daily PnL, consecutive losses,
+     * and whether any circuit breaker is tripped.
+     * GET /test/risk/status?balance=1000
+     */
+    @GetMapping("/risk/status")
+    public ResponseEntity<RiskManager.RiskStatus> riskStatus(
+            @RequestParam(defaultValue = "1000") BigDecimal balance) {
+        return ResponseEntity.ok(riskManager.currentStatus(balance));
+    }
+
+    /**
+     * Validates whether a new trade would be approved right now.
+     * GET /test/risk/validate?balance=1000
+     */
+    @GetMapping("/risk/validate")
+    public ResponseEntity<Map<String, Object>> riskValidate(
+            @RequestParam(defaultValue = "1000") BigDecimal balance) {
+        var result = riskManager.validate(balance);
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("approved", result.approved());
+        map.put("reason", result.reason());
+        map.put("positionSizeEur", result.positionSizeEur());
+        return ResponseEntity.ok(map);
+    }
+
+    // ─── Paper Trading ────────────────────────────────────────────────────────
+
+    /**
+     * Runs the full pipeline: fetch signal → risk check → open/close paper position.
+     * Defaults to trading.paper-balance from config; override with ?balance= to test
+     * how the bot behaves with different account sizes.
+     * POST /test/paper/simulate?balance=50000
+     */
+    @PostMapping("/paper/simulate")
+    public ResponseEntity<Map<String, Object>> paperSimulate(
+            @RequestParam(required = false) BigDecimal balance) {
+        if (balance == null) {
+            balance = tradingConfig.getPaperBalance();
+        }
+        log.info("TEST: paper simulate with balance={}", balance);
+
+        Signal signal = signalEngine.evaluateAndPersist();
+        BigDecimal currentPrice = marketDataService.getCurrentPrice();
+
+        orderExecutionService.monitorPositions(currentPrice);
+        var position = orderExecutionService.executeSignal(signal, balance, currentPrice);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("signal", signalToMap(signal));
+        result.put("currentPrice", currentPrice);
+        result.put("positionOpened", position.isPresent());
+        position.ifPresent(p -> result.put("positionId", p.getId()));
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Lists all currently open paper positions.
+     * GET /test/paper/positions
+     */
+    @GetMapping("/paper/positions")
+    public ResponseEntity<List<Position>> paperPositions() {
+        return ResponseEntity.ok(positionRepository.findByStatus(OrderStatus.OPEN));
+    }
+
+    /**
+     * Lists recent closed trades with PnL.
+     * GET /test/paper/trades?limit=20
+     */
+    @GetMapping("/paper/trades")
+    public ResponseEntity<List<Trade>> paperTrades(
+            @RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok(
+                tradeRepository.findRecentTradesByPair("BTC-EUR", limit));
+    }
+
+    // ─── Portfolio ────────────────────────────────────────────────────────────
+
+    /**
+     * Live portfolio snapshot — open positions + unrealised PnL at the current price.
+     * GET /test/portfolio/snapshot
+     */
+    @GetMapping("/portfolio/snapshot")
+    public ResponseEntity<PortfolioSnapshot> portfolioSnapshot() {
+        BigDecimal currentPrice = marketDataService.getCurrentPrice();
+        return ResponseEntity.ok(portfolioService.getSnapshot(currentPrice));
+    }
+
+    /**
+     * Aggregate statistics across all closed trades: win rate, total PnL, expectancy.
+     * GET /test/portfolio/stats
+     */
+    @GetMapping("/portfolio/stats")
+    public ResponseEntity<TradingStats> portfolioStats() {
+        return ResponseEntity.ok(tradeService.getStats());
     }
 
     private Map<String, Object> signalToMap(Signal signal) {

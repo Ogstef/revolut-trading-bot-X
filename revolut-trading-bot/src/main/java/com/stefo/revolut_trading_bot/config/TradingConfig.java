@@ -23,6 +23,11 @@ public class TradingConfig {
     @Positive
     private int pollingIntervalSeconds;
 
+    // Simulated starting balance used in PAPER mode.
+    // In LIVE mode this is ignored — the real Revolut EUR balance is used instead.
+    @Positive
+    private BigDecimal paperBalance;
+
     @Valid
     @NotNull
     private Strategy strategy = new Strategy();

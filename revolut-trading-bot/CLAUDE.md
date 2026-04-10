@@ -213,32 +213,39 @@ Using Ta4j library with configurable parameters.
 - Test endpoints: `GET /test/signals/current`, `/test/signals/cached`, `/test/signals/history`
 - **Milestone:** Live EMA/RSI signals computed from real BTC-EUR candles ✅
 
-### Phase 4 — Risk Management & Paper Trading
-- RiskManager — validates trades against all risk rules, calculates position size
-- TakeProfitStopLossManager — calculates TP/SL prices, checks exit conditions
-- PaperTradingService — simulates order fills using current market price, tracks virtual balance
-- OrderExecutionService — routes to Paper or Live based on config
-- **Milestone:** Full paper trade execution from signal to simulated fill
+### Phase 4 — Risk Management & Paper Trading ✅
+- `RiskValidationResult` — record: approved, reason, positionSizeEur
+- `RiskManager` — validates concurrent positions, daily loss CB, consecutive loss CB; calculates 2% position size. `currentStatus()` for monitoring.
+- `TakeProfitStopLossManager` — calculates TP/SL prices; `checkExitCondition()` returns Optional<exitReason>
+- `PaperTradingService` — `openPosition()` creates Position + Trade; `closePosition()` fills exitPrice/PnL and marks CLOSED
+- `OrderExecutionService` — `executeSignal()` opens/closes on BUY/SELL; `monitorPositions()` checks TP/SL on all open positions
+- Test endpoints: `GET /test/risk/status`, `GET /test/risk/validate`, `POST /test/paper/simulate`, `GET /test/paper/positions`, `GET /test/paper/trades`
+- **Milestone:** Full paper trade execution from signal → risk check → simulated fill ✅
 
-### Phase 5 — Trading Loop & Portfolio
-- TradingLoop — @Scheduled main heartbeat, orchestrates the full cycle
-- PortfolioService — tracks open positions, calculates PnL
-- TradeService — records completed trades, computes win rate and statistics
-- Open position monitoring — checks TP/SL on every cycle
-- Circuit breaker logic — stops bot on excessive losses
-- **Milestone:** Bot runs autonomously in paper mode
+### Phase 5 — Trading Loop & Portfolio ✅
+- `TradingLoop` — `@Scheduled(fixedDelay)` every 30s. Cycle: evaluate signal → monitor TP/SL → fetch balance → log risk state → execute signal → log portfolio snapshot. All exceptions caught — a bad cycle never stops the bot.
+- `PortfolioService` — `getSnapshot(currentPrice)` returns `PortfolioSnapshot`: openPositions, totalInvested, unrealisedPnl, unrealisedPnlPct
+- `TradeService` — `getStats()` returns `TradingStats`: winRate, totalPnl, averageWin/Loss, bestTrade, worstTrade, expectancy
+- `PortfolioSnapshot` + `TradingStats` — immutable record DTOs
+- Test endpoints: `GET /test/portfolio/snapshot`, `GET /test/portfolio/stats`
+- **Milestone:** Bot runs autonomously in paper mode, logs every cycle ✅
 
-### Phase 6 — Monitoring Dashboard
-- DashboardController REST API:
-    - `GET /api/status` — bot status, current mode, circuit breaker state
-    - `GET /api/positions` — open positions with live PnL
-    - `GET /api/trades` — trade history with stats
-    - `GET /api/stats` — win rate, total PnL, average trade duration
-    - `GET /api/pnl` — daily/weekly/monthly PnL breakdown
-    - `POST /api/config` — update trading parameters at runtime
-    - `POST /api/emergency-stop` — immediately stop trading
-- AlertService — SLF4J structured logging (v1), Telegram webhook (v2)
-- **Milestone:** Can monitor and control bot remotely via REST
+### Phase 6 — Monitoring Dashboard ✅
+- `BotStateService` — `AtomicBoolean` running flag; `stop()` / `resume()` thread-safe
+- `AlertService` — structured SLF4J events: `[TRADE OPEN]`, `[TRADE CLOSE]`, `[CIRCUIT BREAKER]`, `[BOT STOP/RESUME]`. V2: swap in Telegram client.
+- `TradingLoop` — checks `BotStateService.isActive()` before every cycle; wires `AlertService` on circuit breaker
+- `PaperTradingService` — calls `alertService.positionOpened/Closed()` on every trade
+- `TradeService.getPnlBreakdown()` — returns daily/weekly/monthly/all-time PnL using `sumPnlSince()`
+- `DashboardController` (`GET/POST /api/*`):
+    - `GET /api/status` — running, mode, pair, openPositions, dailyPnl, consecutiveLosses, circuitBreakerOn
+    - `GET /api/positions` — open positions with live unrealised PnL at current market price
+    - `GET /api/trades?limit=50` — recent closed trades
+    - `GET /api/stats` — win rate, total PnL, avgWin/Loss, expectancy
+    - `GET /api/pnl` — PnL broken down by day/week/month/all-time
+    - `POST /api/emergency-stop` — stops bot immediately (open positions stay open)
+    - `POST /api/resume` — resumes bot after emergency stop
+    - `POST /api/config` — runtime config update (risk params, strategy params, paper balance); changes take effect next cycle
+- **Milestone:** Can monitor and control bot remotely via REST ✅
 
 ### Phase 7 — Backtest & Go Live
 - Backtest mode — replay historical candles through the strategy, compute hypothetical results
