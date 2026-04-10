@@ -2,6 +2,7 @@ package com.stefo.revolut_trading_bot.market;
 
 import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.model.dto.CandleResponse;
+import com.stefo.revolut_trading_bot.model.dto.TickerResponse;
 import com.stefo.revolut_trading_bot.model.entity.Candlestick;
 import com.stefo.revolut_trading_bot.repository.CandlestickRepository;
 import lombok.RequiredArgsConstructor;
@@ -23,8 +24,10 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class MarketDataService {
 
-    private static final String CANDLE_INTERVAL = "15m";
-    private static final Duration BAR_DURATION = Duration.ofMinutes(15);
+    // 15-minute candles — interval must be an integer (minutes), not a string like "15m"
+    private static final int CANDLE_INTERVAL_MINUTES = 15;
+    private static final String CANDLE_INTERVAL_LABEL = "15m";
+    private static final Duration BAR_DURATION = Duration.ofMinutes(CANDLE_INTERVAL_MINUTES);
 
     private final MarketDataClient marketDataClient;
     private final CandlestickRepository candlestickRepository;
@@ -34,9 +37,9 @@ public class MarketDataService {
 
     public BarSeries fetchAndBuildBarSeries() {
         String pair = tradingConfig.getPair();
-        log.info("Fetching candles for {} interval {}", pair, CANDLE_INTERVAL);
+        log.info("Fetching candles for {} interval {}m", pair, CANDLE_INTERVAL_MINUTES);
 
-        List<CandleResponse> candles = marketDataClient.getCandles(pair, CANDLE_INTERVAL);
+        List<CandleResponse> candles = marketDataClient.getCandles(pair, CANDLE_INTERVAL_MINUTES);
         log.info("Received {} candles from API", candles.size());
 
         persistCandles(candles, pair);
@@ -53,37 +56,45 @@ public class MarketDataService {
         return barSeries;
     }
 
+    /**
+     * Returns the latest price. Uses in-memory BarSeries if available,
+     * otherwise fetches a live ticker from the API (cheaper than a full candle fetch).
+     */
     public BigDecimal getCurrentPrice() {
         if (barSeries != null && barSeries.getBarCount() > 0) {
             Bar lastBar = barSeries.getLastBar();
             return BigDecimal.valueOf(lastBar.getClosePrice().doubleValue());
         }
-        return fetchCurrentPriceFromApi();
+        return fetchCurrentPriceFromTicker();
     }
 
-    private BigDecimal fetchCurrentPriceFromApi() {
+    private BigDecimal fetchCurrentPriceFromTicker() {
         String pair = tradingConfig.getPair();
-        var trades = marketDataClient.getPublicTrades(pair);
-        if (trades.isEmpty()) {
-            log.warn("No public trades available for {}", pair);
+        List<TickerResponse> tickers = marketDataClient.getTickers(pair);
+        if (tickers.isEmpty()) {
+            log.warn("No ticker data available for {}", pair);
             return BigDecimal.ZERO;
         }
-        return trades.getFirst().price();
+        // Use mid-price (average of best bid/ask) as a neutral current price reference
+        BigDecimal mid = tickers.getFirst().mid();
+        log.debug("Current price from ticker mid: {}", mid);
+        return mid;
     }
 
     private void persistCandles(List<CandleResponse> candles, String pair) {
         int newCount = 0;
         for (CandleResponse candle : candles) {
+            // API returns 'start' (candle open time) in Unix epoch ms
             LocalDateTime timestamp = LocalDateTime.ofInstant(
-                    Instant.ofEpochMilli(candle.timestamp()), ZoneOffset.UTC);
+                    Instant.ofEpochMilli(candle.start()), ZoneOffset.UTC);
 
             Optional<Candlestick> existing = candlestickRepository
-                    .findByPairAndIntervalAndTimestamp(pair, CANDLE_INTERVAL, timestamp);
+                    .findByPairAndIntervalAndTimestamp(pair, CANDLE_INTERVAL_LABEL, timestamp);
 
             if (existing.isEmpty()) {
                 Candlestick entity = Candlestick.builder()
                         .pair(pair)
-                        .interval(CANDLE_INTERVAL)
+                        .interval(CANDLE_INTERVAL_LABEL)
                         .openPrice(candle.open())
                         .highPrice(candle.high())
                         .lowPrice(candle.low())
@@ -94,6 +105,7 @@ public class MarketDataService {
                 candlestickRepository.save(entity);
                 newCount++;
             } else {
+                // Update the latest (still-forming) candle
                 Candlestick entity = existing.get();
                 entity.setClosePrice(candle.close());
                 entity.setHighPrice(candle.high());
@@ -102,19 +114,19 @@ public class MarketDataService {
                 candlestickRepository.save(entity);
             }
         }
-        log.debug("Persisted {} new candles, updated {} existing", newCount, candles.size() - newCount);
+        log.debug("Candle sync: {} new, {} updated", newCount, candles.size() - newCount);
     }
 
     private BarSeries buildBarSeries(String pair) {
         List<Candlestick> candles = candlestickRepository
-                .findByPairAndIntervalOrderByTimestampAsc(pair, CANDLE_INTERVAL);
+                .findByPairAndIntervalOrderByTimestampAsc(pair, CANDLE_INTERVAL_LABEL);
         return buildBarSeriesFromCandles(candles);
     }
 
     private BarSeries buildBarSeriesFromDb() {
         String pair = tradingConfig.getPair();
         List<Candlestick> candles = candlestickRepository
-                .findByPairAndIntervalOrderByTimestampAsc(pair, CANDLE_INTERVAL);
+                .findByPairAndIntervalOrderByTimestampAsc(pair, CANDLE_INTERVAL_LABEL);
         barSeries = buildBarSeriesFromCandles(candles);
         log.info("BarSeries built from DB with {} bars", barSeries.getBarCount());
         return barSeries;

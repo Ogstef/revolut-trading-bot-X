@@ -8,6 +8,18 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+/**
+ * Service-level wrapper around RevolutApiClient.
+ *
+ * Paths are taken from the official Revolut X API docs:
+ *  - GET /candles/{symbol}?interval={minutes}   — OHLCV candles (authenticated)
+ *  - GET /tickers?symbols={symbol}              — live bid/ask/last_price (authenticated)
+ *  - GET /order-book/{symbol}?limit={n}         — order book depth (authenticated)
+ *  - GET /balances                              — account balances (authenticated)
+ *  - POST /orders                              — place order (authenticated)
+ *  - GET /orders/{venue_order_id}              — order detail (authenticated)
+ *  - DELETE /orders/{venue_order_id}           — cancel order (authenticated)
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -15,34 +27,42 @@ public class MarketDataClient {
 
     private final RevolutApiClient apiClient;
 
-    // --- Public endpoints (no auth) ---
+    // ─── Market Data (authenticated) ──────────────────────────────────────────
 
-    public List<SymbolResponse> getSymbols() {
-        log.debug("Fetching available symbols");
-        return apiClient.getPublic("/public/symbols", null,
+    /**
+     * OHLCV candles for the given symbol.
+     * @param symbol         e.g. "BTC-EUR"
+     * @param intervalMinutes valid values: 1, 5, 15, 30, 60, 240, 1440, 2880, 5760, 10080, 20160, 40320
+     */
+    public List<CandleResponse> getCandles(String symbol, int intervalMinutes) {
+        log.debug("Fetching candles for {} interval {}m", symbol, intervalMinutes);
+        String query = "interval=" + intervalMinutes;
+        return apiClient.getAuthenticated("/candles/" + symbol, query,
                 new TypeReference<>() {});
     }
 
-    public List<MarketTradeResponse> getPublicTrades(String symbol) {
-        log.debug("Fetching public trades for {}", symbol);
-        return apiClient.getPublic("/public/trades", "symbol=" + symbol,
+    /**
+     * Real-time ticker snapshot (best bid, ask, mid, last traded price).
+     * Returns a list; filter by symbol in the query param.
+     */
+    public List<TickerResponse> getTickers(String symbol) {
+        log.debug("Fetching ticker for {}", symbol);
+        return apiClient.getAuthenticated("/tickers", "symbols=" + symbol,
                 new TypeReference<>() {});
     }
 
-    public OrderBookResponse getOrderBook(String symbol) {
-        log.debug("Fetching order book for {}", symbol);
-        return apiClient.getPublic("/public/order-book", "symbol=" + symbol,
+    /**
+     * Order book snapshot for the given symbol.
+     * @param symbol e.g. "BTC-EUR"
+     * @param depth  number of price levels (1–20)
+     */
+    public OrderBookResponse getOrderBook(String symbol, int depth) {
+        log.debug("Fetching order book for {} depth {}", symbol, depth);
+        return apiClient.getAuthenticated("/order-book/" + symbol, "limit=" + depth,
                 new TypeReference<>() {});
     }
 
-    // --- Authenticated endpoints ---
-
-    public List<CandleResponse> getCandles(String symbol, String interval) {
-        log.debug("Fetching candles for {} interval {}", symbol, interval);
-        String query = "symbol=" + symbol + "&interval=" + interval;
-        return apiClient.getAuthenticated("/market-data/candles", query,
-                new TypeReference<>() {});
-    }
+    // ─── Account (authenticated) ───────────────────────────────────────────────
 
     public List<BalanceResponse> getBalances() {
         log.debug("Fetching account balances");
@@ -50,27 +70,30 @@ public class MarketDataClient {
                 new TypeReference<>() {});
     }
 
-    public OrderResponse placeOrder(OrderRequest orderRequest) {
+    // ─── Orders (authenticated) ────────────────────────────────────────────────
+
+    /**
+     * Place a market or limit order. Returns a slim acknowledgement.
+     * Fetch GET /orders/{venue_order_id} for the full status.
+     */
+    public PlaceOrderResponse placeOrder(OrderRequest orderRequest) {
         log.info("Placing order: {} {} {}", orderRequest.side(), orderRequest.symbol(),
                 orderRequest.clientOrderId());
         return apiClient.postAuthenticated("/orders", orderRequest,
                 new TypeReference<>() {});
     }
 
-    public List<OrderResponse> getActiveOrders() {
-        log.debug("Fetching active orders");
-        return apiClient.getAuthenticated("/orders/active", null,
+    /**
+     * Fetch full details of a single order by its venue-assigned ID.
+     */
+    public OrderResponse getOrder(String venueOrderId) {
+        log.debug("Fetching order {}", venueOrderId);
+        return apiClient.getAuthenticated("/orders/" + venueOrderId, null,
                 new TypeReference<>() {});
     }
 
-    public void cancelOrder(String orderId) {
-        log.info("Cancelling order {}", orderId);
-        apiClient.deleteAuthenticated("/orders/" + orderId);
-    }
-
-    public List<OrderResponse> getTradeHistory() {
-        log.debug("Fetching trade history");
-        return apiClient.getAuthenticated("/trades", null,
-                new TypeReference<>() {});
+    public void cancelOrder(String venueOrderId) {
+        log.info("Cancelling order {}", venueOrderId);
+        apiClient.deleteAuthenticated("/orders/" + venueOrderId);
     }
 }

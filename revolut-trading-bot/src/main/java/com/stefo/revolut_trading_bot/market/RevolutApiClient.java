@@ -119,7 +119,12 @@ public class RevolutApiClient {
             }
 
             log.debug("API response {}: {} chars", response.code(), bodyString.length());
-            return objectMapper.readValue(bodyString, typeRef);
+
+            // All Revolut X API responses are wrapped: { "data": <payload> }
+            // Unwrap before deserializing so callers work directly with the payload type.
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(bodyString);
+            com.fasterxml.jackson.databind.JsonNode payload = root.has("data") ? root.get("data") : root;
+            return objectMapper.convertValue(payload, typeRef);
         } catch (IOException e) {
             throw new ApiException("API call failed: " + e.getMessage(), e);
         }

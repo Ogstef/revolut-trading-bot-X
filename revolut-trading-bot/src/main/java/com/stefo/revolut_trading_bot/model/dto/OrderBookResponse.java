@@ -11,9 +11,11 @@ public record OrderBookResponse(
         @JsonProperty("bids") List<PriceLevel> bids,
         @JsonProperty("asks") List<PriceLevel> asks
 ) {
+    // Revolut X uses abbreviated field names in PriceLevel objects:
+    // p = price, q = quantity (aggregated at this level), pdt = publication timestamp ms
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record PriceLevel(
-            @JsonProperty("price") BigDecimal price,
-            @JsonProperty("size") BigDecimal size
+            @JsonProperty("p") BigDecimal price,
+            @JsonProperty("q") BigDecimal quantity
     ) {}
 }

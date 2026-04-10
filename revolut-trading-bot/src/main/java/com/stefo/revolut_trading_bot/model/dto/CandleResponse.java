@@ -7,7 +7,7 @@ import java.math.BigDecimal;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record CandleResponse(
-        @JsonProperty("timestamp") long timestamp,
+        @JsonProperty("start") long start,   // candle open timestamp — Unix epoch ms
         @JsonProperty("open") BigDecimal open,
         @JsonProperty("high") BigDecimal high,
         @JsonProperty("low") BigDecimal low,
