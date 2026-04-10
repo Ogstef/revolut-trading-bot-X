@@ -12,6 +12,7 @@ import org.ta4j.core.indicators.helpers.ClosePriceIndicator;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 
 /**
  * EMA(9)/EMA(21) crossover strategy filtered by RSI(14).
@@ -21,7 +22,7 @@ import java.math.RoundingMode;
  * HOLD → everything else
  *
  * Crossover is detected by comparing the current bar to the previous bar,
- * so we need at least emaLongPeriod + 1 bars before we can produce a real signal.
+ * so we need at least emaLongPeriod + 1 bars before a real signal can fire.
  */
 @Slf4j
 @Component
@@ -32,20 +33,22 @@ public class EmaCrossoverStrategy implements TradingStrategy {
 
     @Override
     public Signal evaluate(BarSeries series) {
-        int shortPeriod = config.getStrategy().getEmaShortPeriod();   // 9
-        int longPeriod  = config.getStrategy().getEmaLongPeriod();    // 21
-        int rsiPeriod   = config.getStrategy().getRsiPeriod();        // 14
-        int overbought  = config.getStrategy().getRsiOverbought();    // 70
-        int oversold    = config.getStrategy().getRsiOversold();      // 30
+        String pair        = config.getPair();
+        int shortPeriod    = config.getStrategy().getEmaShortPeriod();   // 9
+        int longPeriod     = config.getStrategy().getEmaLongPeriod();    // 21
+        int rsiPeriod      = config.getStrategy().getRsiPeriod();        // 14
+        int overbought     = config.getStrategy().getRsiOverbought();    // 70
+        int oversold       = config.getStrategy().getRsiOversold();      // 30
+        Instant now        = Instant.now();
 
         int lastIdx = series.getEndIndex();
 
-        // We need prevIdx too, so minimum is longPeriod bars (0-indexed: lastIdx >= longPeriod)
+        // Need prevIdx too, so minimum is longPeriod bars (0-indexed: lastIdx >= longPeriod)
         if (lastIdx < longPeriod) {
             String reason = String.format("Insufficient data: %d bars present, need at least %d",
                     lastIdx + 1, longPeriod + 1);
             log.warn(reason);
-            return hold(reason, null, null, null, null);
+            return hold(reason, pair, now, null, null, null, null);
         }
 
         ClosePriceIndicator close  = new ClosePriceIndicator(series);
@@ -78,7 +81,7 @@ public class EmaCrossoverStrategy implements TradingStrategy {
                     "EMA%d crossed above EMA%d — RSI=%.1f (neutral) — price above EMA%d",
                     shortPeriod, longPeriod, rsiNow.doubleValue(), longPeriod);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(75), reason,
-                    ema9Now, ema21Now, rsiNow, priceNow);
+                    pair, now, ema9Now, ema21Now, rsiNow, priceNow);
         }
 
         if (bearishCross || rsiIsOver) {
@@ -88,17 +91,18 @@ public class EmaCrossoverStrategy implements TradingStrategy {
                     : String.format("RSI=%.1f exceeded overbought threshold of %d",
                             rsiNow.doubleValue(), overbought);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(70), reason,
-                    ema9Now, ema21Now, rsiNow, priceNow);
+                    pair, now, ema9Now, ema21Now, rsiNow, priceNow);
         }
 
         String reason = String.format("No crossover — EMA%d=%.2f EMA%d=%.2f RSI=%.1f",
                 shortPeriod, ema9Now.doubleValue(), longPeriod, ema21Now.doubleValue(), rsiNow.doubleValue());
-        return hold(reason, ema9Now, ema21Now, rsiNow, priceNow);
+        return hold(reason, pair, now, ema9Now, ema21Now, rsiNow, priceNow);
     }
 
-    private Signal hold(String reason, BigDecimal ema9, BigDecimal ema21,
-                        BigDecimal rsi, BigDecimal price) {
-        return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason, ema9, ema21, rsi, price);
+    private Signal hold(String reason, String pair, Instant evaluatedAt,
+                        BigDecimal ema9, BigDecimal ema21, BigDecimal rsi, BigDecimal price) {
+        return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
+                pair, evaluatedAt, ema9, ema21, rsi, price);
     }
 
     private BigDecimal bd(double value) {

@@ -195,12 +195,13 @@ public class TestController {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("signal", signal.type());
         result.put("confidence", signal.confidence());
+        result.put("pair", signal.pair());
+        result.put("evaluatedAt", signal.evaluatedAt().toString());
         result.put("reason", signal.reason());
         result.put("emaShort", signal.emaShort());
         result.put("emaLong", signal.emaLong());
         result.put("rsi", signal.rsi());
         result.put("currentPrice", signal.currentPrice());
-        result.put("evaluatedAt", Instant.now().toString());
         return result;
     }
 }

@@ -47,25 +47,20 @@ Custom Ed25519 signature scheme on every authenticated request.
 
 ### Endpoints
 
-**Public (no auth):**
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/public/symbols` | Available trading pairs |
-| GET | `/public/trades?symbol=BTC-EUR` | Latest 100 market trades |
-| GET | `/public/order-book?symbol=BTC-EUR` | Bids/asks (5 levels) |
+All endpoints are **authenticated** (require `X-Revx-Timestamp` + `X-Revx-Signature` headers).
+All responses are wrapped: `{ "data": <payload> }` — the client unwraps this automatically.
 
-**Authenticated:**
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/market-data/candles?symbol=BTC-EUR&interval=15m` | Historical OHLCV candles |
-| GET | `/market-data/order-book?symbol=BTC-EUR` | Full order book |
-| GET | `/balance` | Account balances |
-| POST | `/orders` | Place order (limit/market) |
-| GET | `/orders/active` | Open orders |
-| DELETE | `/orders/{id}` | Cancel order |
-| GET | `/trades` | Client trade history (fills) |
+| Method | Path | Query params | Description |
+|--------|------|--------------|-------------|
+| GET | `/candles/{symbol}` | `interval` (int, minutes: 1/5/15/30/60/240/1440…), `since` (epoch ms), `until` (epoch ms) | Historical OHLCV candles. Response field is `start` (not `timestamp`). Default returns last 5000 candles. |
+| GET | `/tickers` | `symbols` (comma-separated) | Real-time bid, ask, mid, last_price per symbol |
+| GET | `/order-book/{symbol}` | `limit` (1–20, default 20) | Order book depth. PriceLevel fields: `p`=price, `q`=quantity |
+| GET | `/balances` | — | Account balances |
+| POST | `/orders` | — | Place order. `side` must be lowercase `"buy"`/`"sell"` |
+| GET | `/orders/{venue_order_id}` | — | Full order detail |
+| DELETE | `/orders/{venue_order_id}` | — | Cancel order |
 
-**Rate limit:** 1000 requests/minute for order endpoints.
+**Rate limit:** 1000 requests/day for limit orders. 1000 requests/minute general.
 
 ### Order Body Structures
 
@@ -74,7 +69,7 @@ Custom Ed25519 signature scheme on every authenticated request.
 {
   "client_order_id": "uuid",
   "symbol": "BTC-EUR",
-  "side": "BUY",
+  "side": "buy",
   "order_configuration": {
     "market": { "quote_size": "100.00" }
   }
@@ -86,11 +81,16 @@ Custom Ed25519 signature scheme on every authenticated request.
 {
   "client_order_id": "uuid",
   "symbol": "BTC-EUR",
-  "side": "BUY",
+  "side": "buy",
   "order_configuration": {
     "limit": { "base_size": "0.001", "price": "62000.00" }
   }
 }
+```
+
+**Place order response** (`POST /orders`):
+```json
+{ "data": { "venue_order_id": "uuid", "client_order_id": "uuid", "state": "pending_new" } }
 ```
 
 ---
@@ -204,13 +204,14 @@ Using Ta4j library with configurable parameters.
 - Rate limiting awareness
 - **Milestone:** Can fetch live BTC-EUR data from Revolut X
 
-### Phase 3 — Signal Engine
-- MarketDataService — fetches candles, converts to Ta4j BarSeries, persists to DB
-- Strategy interface: `Signal analyze(BarSeries series)` + `String getName()`
-- EmaCrossoverStrategy — implements the EMA(9/21) + RSI(14) logic using Ta4j
-- Signal record: type, pair, confidence, reason, timestamp
-- SignalEngine — orchestrator that runs strategies and logs all signals to DB
-- **Milestone:** Can compute signals from real market data
+### Phase 3 — Signal Engine ✅
+- MarketDataService — fetches candles (`/candles/{symbol}?interval=15`), builds Ta4j BarSeries, persists to DB
+- `TradingStrategy` interface: `Signal evaluate(BarSeries series)`
+- `EmaCrossoverStrategy` — implements EMA(9/21) + RSI(14) logic using Ta4j indicators
+- `Signal` record: type, confidence, reason, pair, evaluatedAt (Instant), emaShort, emaLong, rsi, currentPrice
+- `SignalEngine` — orchestrates fetch → evaluate → persist to signal_logs. Two modes: `evaluateAndPersist()` (API call) and `evaluateFromCache()` (no API call)
+- Test endpoints: `GET /test/signals/current`, `/test/signals/cached`, `/test/signals/history`
+- **Milestone:** Live EMA/RSI signals computed from real BTC-EUR candles ✅
 
 ### Phase 4 — Risk Management & Paper Trading
 - RiskManager — validates trades against all risk rules, calculates position size
