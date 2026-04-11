@@ -1,6 +1,8 @@
 package com.stefo.revolut_trading_bot.model.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.stefo.revolut_trading_bot.model.enums.OrderSide;
+import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.model.enums.TradingMode;
 import jakarta.persistence.*;
 import lombok.*;
@@ -24,6 +26,7 @@ public class Trade {
     @JoinColumn(name = "position_id")
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
+    @JsonIgnore
     private Position position;
 
     @Column(nullable = false, length = 20)
@@ -48,6 +51,10 @@ public class Trade {
     @Column(name = "pnl_pct", precision = 18, scale = 8)
     private BigDecimal pnlPct;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "strategy_name", nullable = false, length = 50)
+    private StrategyType strategyName;
+
     @Column(name = "exit_reason", length = 20)
     private String exitReason;
 
@@ -59,4 +66,8 @@ public class Trade {
     @Column(name = "executed_at", nullable = false)
     @Builder.Default
     private LocalDateTime executedAt = LocalDateTime.now();
+
+    // Null while the position is open; set by PaperTradingService.closePosition()
+    @Column(name = "closed_at")
+    private LocalDateTime closedAt;
 }

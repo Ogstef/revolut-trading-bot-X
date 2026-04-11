@@ -2,6 +2,7 @@ package com.stefo.revolut_trading_bot.repository;
 
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
+import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -19,4 +20,16 @@ public interface PositionRepository extends JpaRepository<Position, Long> {
 
     @Query("SELECT p FROM Position p WHERE p.status = 'OPEN' AND p.pair = :pair")
     List<Position> findOpenPositionsByPair(String pair);
+
+    // ─── Strategy-scoped queries (Phase 7 — multi-strategy) ───────────────────
+
+    List<Position> findByStatusAndStrategyName(OrderStatus status, StrategyType strategyName);
+
+    long countByStatusAndStrategyName(OrderStatus status, StrategyType strategyName);
+
+    // ─── Pair + strategy scoped queries (Phase 8 — multi-pair) ───────────────
+
+    List<Position> findByStatusAndPairAndStrategyName(OrderStatus status, String pair, StrategyType strategyName);
+
+    long countByStatusAndPairAndStrategyName(OrderStatus status, String pair, StrategyType strategyName);
 }

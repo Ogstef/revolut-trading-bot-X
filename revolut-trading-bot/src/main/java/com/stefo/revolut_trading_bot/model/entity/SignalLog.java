@@ -1,6 +1,7 @@
 package com.stefo.revolut_trading_bot.model.entity;
 
 import com.stefo.revolut_trading_bot.model.enums.SignalType;
+import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -42,6 +43,10 @@ public class SignalLog {
 
     @Column(name = "current_price", precision = 18, scale = 8)
     private BigDecimal currentPrice;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "strategy_name", nullable = false, length = 50)
+    private StrategyType strategyName;
 
     @Column(name = "created_at", nullable = false)
     @Builder.Default

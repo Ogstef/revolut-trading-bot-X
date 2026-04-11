@@ -247,12 +247,473 @@ Using Ta4j library with configurable parameters.
     - `POST /api/config` — runtime config update (risk params, strategy params, paper balance); changes take effect next cycle
 - **Milestone:** Can monitor and control bot remotely via REST ✅
 
-### Phase 7 — Backtest & Go Live
-- Backtest mode — replay historical candles through the strategy, compute hypothetical results
-- Run paper mode for 2-4 weeks, analyze results
-- LiveTradingService — real Revolut X order placement via POST /orders
-- Start with absolute minimum position sizes
-- **Milestone:** Real trades with real money
+### Phase 7 — Multi-Strategy Parallel Paper Trading
+
+**Goal:** Run N strategies simultaneously, each with its own independent virtual portfolio. Same market data, same time window — but every strategy makes its own decisions, opens its own positions, and tracks its own P&L. After weeks of data you compare them side-by-side.
+
+---
+
+#### Core idea: everything is strategy-scoped
+
+Every position, trade, and signal log is tagged with `strategy_name`. The risk manager, portfolio service, and trade service all accept a `strategyName` filter. Nothing is global anymore.
+
+---
+
+#### Step 1 — Flyway migration `V2__add_strategy_name.sql`
+
+```sql
+ALTER TABLE trading.signal_logs
+    ADD COLUMN strategy_name VARCHAR(50) NOT NULL DEFAULT 'EMA_CROSSOVER';
+
+ALTER TABLE trading.positions
+    ADD COLUMN strategy_name VARCHAR(50) NOT NULL DEFAULT 'EMA_CROSSOVER';
+
+ALTER TABLE trading.trades
+    ADD COLUMN strategy_name VARCHAR(50) NOT NULL DEFAULT 'EMA_CROSSOVER';
+```
+
+---
+
+#### Step 2 — Update JPA entities
+
+Add to `SignalLog`, `Position`, and `Trade`:
+```java
+@Column(name = "strategy_name", nullable = false, length = 50)
+private String strategyName;
+```
+
+---
+
+#### Step 3 — Update `TradingStrategy` interface
+
+```java
+public interface TradingStrategy {
+    Signal evaluate(BarSeries series);
+    String name();   // "EMA_CROSSOVER", "MACD", "BOLLINGER", "RSI_MOMENTUM"
+}
+```
+
+`EmaCrossoverStrategy.name()` returns `"EMA_CROSSOVER"`. Update its `@Component` to include the name.
+
+---
+
+#### Step 4 — New strategies (all in `strategy/impl/`)
+
+All strategies receive `TradingConfig` for the pair name. Use the existing `Signal` record unchanged — repurpose fields where needed (documented below).
+
+**`MacdStrategy` — name: `"MACD"`**
+- `MACDIndicator(close, 12, 26)` → MACD line
+- `EMAIndicator(macd, 9)` → signal line
+- histogram = MACD line − signal line
+- BUY: histogram crosses above zero (prev ≤ 0, current > 0)
+- SELL: histogram crosses below zero (prev ≥ 0, current < 0)
+- HOLD: else
+- Signal fields: `emaShort` = MACD line value, `emaLong` = signal line value, `rsi` = histogram
+
+**`BollingerBandsStrategy` — name: `"BOLLINGER"`**
+- `SMAIndicator(close, 20)` → middle band
+- `StandardDeviationIndicator(close, 20)` → σ
+- upper = SMA + (2 × σ), lower = SMA − (2 × σ)
+- BUY: price crosses above lower band (prev bar price ≤ lower, current > lower)
+- SELL: price crosses above upper band (prev bar price ≤ upper, current > upper)
+- HOLD: price inside bands
+- Signal fields: `emaShort` = upper band, `emaLong` = lower band, `rsi` = %B = (price − lower) / (upper − lower) × 100
+
+**`RsiMomentumStrategy` — name: `"RSI_MOMENTUM"`**
+- `RSIIndicator(close, 14)`
+- BUY: RSI crosses above 30 (prev < 30, current ≥ 30) — recovering from oversold
+- SELL: RSI crosses above 70 (prev < 70, current ≥ 70) — entering overbought
+- HOLD: else
+- Signal fields: `emaShort` = null, `emaLong` = null, `rsi` = current RSI
+
+---
+
+#### Step 5 — Update `SignalEngine`
+
+Inject `List<TradingStrategy>` — Spring autowires all implementations automatically.
+
+```java
+// Fetch candles ONCE — shared across all strategies
+BarSeries series = marketDataService.fetchAndBuildBarSeries();
+
+// Run every strategy, persist every signal
+List<Signal> allSignals = strategies.stream()
+    .map(s -> {
+        Signal signal = s.evaluate(series);
+        persist(signal, s.name());   // persist now takes strategyName
+        return signal;
+    }).toList();
+
+// Return signal from the primary strategy for the trading loop
+return allSignals.stream()
+    .filter(s -> s.strategyName().equals(config.getPrimaryStrategy()))
+    .findFirst()
+    .orElseThrow();
+```
+
+`Signal` record: add `String strategyName` field so the signal carries its own identity through the pipeline.
+
+`persist(signal, strategyName)` sets `strategyName` on `SignalLog`.
+
+---
+
+#### Step 6 — Update `TradingLoop`
+
+Instead of one execution cycle, iterate all strategies:
+
+```java
+// Fetch once — returns signals for ALL strategies
+List<Signal> signals = signalEngine.evaluateAllAndPersist();
+BigDecimal currentPrice = signals.get(0).currentPrice();
+
+// Each strategy monitors and executes its own positions independently
+for (Signal signal : signals) {
+    orderExecutionService.monitorPositions(currentPrice, signal.strategyName());
+    BigDecimal balance = resolveBalance(signal.strategyName());
+    orderExecutionService.executeSignal(signal, balance, currentPrice);
+}
+```
+
+---
+
+#### Step 7 — Update `OrderExecutionService`
+
+`monitorPositions(price, strategyName)` — only checks positions tagged with that strategy.
+`executeSignal(signal, balance, price)` — passes `signal.strategyName()` down to `PaperTradingService`.
+
+---
+
+#### Step 8 — Update `PaperTradingService`
+
+`openPosition(signal, sizeEur, price)` — sets `strategyName` on both `Position` and `Trade` from `signal.strategyName()`.
+`closePosition(position, price, reason)` — already works; position carries the strategy name.
+
+---
+
+#### Step 9 — Update `RiskManager`
+
+All queries become strategy-scoped:
+
+```java
+// concurrent positions: count only this strategy's open positions
+positionRepository.countByStatusAndStrategyName(OPEN, strategyName)
+
+// daily PnL: sum only this strategy's trades today
+tradeRepository.sumPnlSinceAndStrategyName(startOfDay, strategyName)
+
+// consecutive losses: last N trades for this strategy
+tradeRepository.findRecentTradesByPairAndStrategy(pair, strategyName, limit)
+```
+
+Each strategy has its own independent circuit breakers.
+
+---
+
+#### Step 10 — Per-strategy paper balance in config
+
+```yaml
+trading:
+  primary-strategy: EMA_CROSSOVER
+  strategy-balances:
+    EMA_CROSSOVER: 10000.00
+    MACD: 10000.00
+    BOLLINGER: 10000.00
+    RSI_MOMENTUM: 10000.00
+```
+
+`TradingConfig` addition:
+```java
+private String primaryStrategy;
+private Map<String, BigDecimal> strategyBalances;
+```
+
+`resolveBalance(strategyName)` in `TradingLoop` looks up `config.getStrategyBalances().get(strategyName)`.
+
+---
+
+#### Step 11 — Repository additions
+
+**`PositionRepository`:**
+```java
+long countByStatusAndStrategyName(OrderStatus status, String strategyName);
+List<Position> findByStatusAndStrategyName(OrderStatus status, String strategyName);
+```
+
+**`TradeRepository`:**
+```java
+@Query("SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t WHERE t.executedAt >= :since AND t.strategyName = :strategyName")
+BigDecimal sumPnlSinceAndStrategyName(@Param("since") LocalDateTime since, @Param("strategyName") String strategyName);
+
+@Query("SELECT t FROM Trade t WHERE t.pair = :pair AND t.strategyName = :strategyName ORDER BY t.executedAt DESC LIMIT :limit")
+List<Trade> findRecentTradesByPairAndStrategy(@Param("pair") String pair, @Param("strategyName") String strategyName, @Param("limit") int limit);
+
+List<Trade> findByStrategyNameOrderByExecutedAtDesc(String strategyName);
+```
+
+**`SignalLogRepository`:**
+```java
+List<SignalLog> findByPairAndStrategyNameOrderByCreatedAtDesc(String pair, String strategyName);
+
+@Query("SELECT s.strategyName, s.signalType, COUNT(s) FROM SignalLog s WHERE s.pair = :pair GROUP BY s.strategyName, s.signalType")
+List<Object[]> countSignalsByStrategy(@Param("pair") String pair);
+```
+
+---
+
+#### Step 12 — Dashboard API additions (`DashboardController`)
+
+```
+GET /api/strategies                         — list all registered strategy names + their stats
+GET /api/strategies/{name}/positions        — open positions for one strategy with live PnL
+GET /api/strategies/{name}/trades?limit=50  — closed trades for one strategy
+GET /api/strategies/{name}/stats            — win rate, PnL, expectancy for one strategy
+GET /api/strategies/{name}/pnl             — daily/weekly/monthly PnL for one strategy
+GET /api/signals/summary                    — signal counts per strategy (BUY/SELL/HOLD breakdown)
+```
+
+---
+
+#### Step 13 — Test endpoints to add to `TestController`
+
+```
+GET /test/signals/by-strategy?strategy=MACD&limit=20
+GET /test/signals/strategy-summary
+GET /test/strategies/{name}/snapshot        — portfolio snapshot for one strategy
+```
+
+---
+
+#### What `Signal` record looks like after this phase
+
+```java
+public record Signal(
+    SignalType type,
+    BigDecimal confidence,
+    String reason,
+    String pair,
+    String strategyName,     // NEW
+    Instant evaluatedAt,
+    BigDecimal emaShort,
+    BigDecimal emaLong,
+    BigDecimal rsi,
+    BigDecimal currentPrice
+) {}
+```
+
+---
+
+#### Milestone
+Four strategies run every 30s on the same candle data. Each has its own positions, trades, circuit breakers, and P&L. Query `trades` grouped by `strategy_name` to see who's winning.
+
+---
+
+### Phase 8 — Multi-Pair Support
+
+**Goal:** Run every strategy on multiple crypto pairs simultaneously. The unit of execution becomes `(pair, strategy)` — e.g. 4 strategies × 3 pairs = 12 independent virtual portfolios, all running in parallel on the same 30-second heartbeat.
+
+**What already works without changes:**
+- `Position`, `Trade`, `SignalLog` entities — already have a `pair` column ✅
+- All repository queries — already filter by pair ✅
+- Strategy implementations — receive a `BarSeries`, don't care which pair it came from ✅
+- `PaperTradingService` — already writes pair from the signal ✅
+
+---
+
+#### Step 1 — Config change: single pair → list of pairs
+
+`application.yml`:
+```yaml
+trading:
+  pairs: [BTC-EUR, ETH-EUR, SOL-EUR]   # replaces single `pair:` field
+  mode: PAPER
+  polling-interval-seconds: 30
+  primary-strategy: EMA_CROSSOVER
+  strategy-balances:
+    BTC-EUR:
+      EMA_CROSSOVER: 10000.00
+      MACD: 10000.00
+      BOLLINGER: 10000.00
+      RSI_MOMENTUM: 10000.00
+    ETH-EUR:
+      EMA_CROSSOVER: 5000.00
+      MACD: 5000.00
+      BOLLINGER: 5000.00
+      RSI_MOMENTUM: 5000.00
+    SOL-EUR:
+      EMA_CROSSOVER: 5000.00
+      MACD: 5000.00
+      BOLLINGER: 5000.00
+      RSI_MOMENTUM: 5000.00
+```
+
+`TradingConfig` changes:
+```java
+// Remove:
+private String pair;
+
+// Add:
+@NotEmpty
+private List<String> pairs;                              // all active pairs
+
+private Map<String, Map<StrategyType, BigDecimal>> strategyBalances;  // pair → strategy → balance
+
+// Helper — used anywhere that previously read config.getPair()
+public String primaryPair() { return pairs.get(0); }
+```
+
+---
+
+#### Step 2 — `MarketDataService`: one BarSeries per pair
+
+```java
+// Before: single BarSeries field
+private BarSeries barSeries;
+
+// After: map keyed by pair
+private final Map<String, BarSeries> barSeriesMap = new ConcurrentHashMap<>();
+
+// Fetch candles for one specific pair, update its BarSeries
+public BarSeries fetchBarSeriesForPair(String pair) { ... }
+
+// Get cached series (no API call)
+public BarSeries getBarSeriesForPair(String pair) { ... }
+
+// Get current price for a specific pair (from ticker)
+public BigDecimal getCurrentPriceForPair(String pair) { ... }
+```
+
+---
+
+#### Step 3 — `SignalEngine`: evaluate all pairs × all strategies
+
+```java
+// New method — replaces evaluateAllAndPersist()
+public List<Signal> evaluateAllPairsAndPersist() {
+    // Fetch candles for ALL pairs in parallel (CompletableFuture)
+    Map<String, BarSeries> seriesMap = config.getPairs().parallelStream()
+        .collect(toMap(pair -> pair, marketDataService::fetchBarSeriesForPair));
+
+    // For each pair, run all strategies
+    return config.getPairs().stream()
+        .flatMap(pair -> strategies.stream()
+            .map(strategy -> {
+                Signal signal = strategy.evaluate(seriesMap.get(pair), pair);
+                persist(signal);
+                return signal;
+            }))
+        .toList();
+    // Returns N_pairs × N_strategies signals e.g. 12 signals for 3 pairs × 4 strategies
+}
+```
+
+`TradingStrategy.evaluate()` gains a `pair` parameter:
+```java
+Signal evaluate(BarSeries series, String pair);
+```
+
+The `pair` is used when constructing the returned `Signal` record (already has a `pair` field).
+
+---
+
+#### Step 4 — `TradingLoop`: outer loop over pairs, inner loop over strategies
+
+```java
+private void runCycle() {
+    List<Signal> allSignals = signalEngine.evaluateAllPairsAndPersist();
+
+    // Group by pair so we log pair-level summaries cleanly
+    Map<String, List<Signal>> byPair = allSignals.stream()
+        .collect(groupingBy(Signal::pair));
+
+    byPair.forEach((pair, signals) -> {
+        BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(pair);
+        signals.forEach(signal -> runStrategyExecution(signal, currentPrice));
+    });
+}
+```
+
+`resolveBalance(signal)` now looks up `config.getStrategyBalances().get(signal.pair()).get(signal.strategyType())`.
+
+---
+
+#### Step 5 — `RiskManager`: queries already pair-scoped, just pass pair through
+
+All existing queries (`countByStatusAndStrategyName`, `sumPnlSinceAndStrategyName`, `findRecentTradesByPairAndStrategy`) already accept a `pair` parameter. The only change is ensuring the `pair` from the signal flows into every risk check call.
+
+---
+
+#### Step 6 — `DashboardController`: add `?pair=` filter to all multi-strategy endpoints
+
+```
+GET /api/strategies?pair=BTC-EUR                         — strategies for one pair
+GET /api/strategies/{name}/positions?pair=BTC-EUR        — positions for pair+strategy
+GET /api/strategies/{name}/trades?pair=BTC-EUR&limit=50
+GET /api/strategies/{name}/stats?pair=BTC-EUR
+GET /api/strategies/{name}/pnl?pair=BTC-EUR
+GET /api/signals/summary?pair=BTC-EUR                    — signal counts for one pair
+GET /api/pairs                                           — NEW: list of configured pairs
+```
+
+`GET /api/pairs` — new endpoint, returns configured pairs and their display info:
+```json
+[
+  { "pair": "BTC-EUR", "baseAsset": "BTC", "quoteAsset": "EUR" },
+  { "pair": "ETH-EUR", "baseAsset": "ETH", "quoteAsset": "EUR" },
+  { "pair": "SOL-EUR", "baseAsset": "SOL", "quoteAsset": "EUR" }
+]
+```
+
+When `?pair=` is omitted, endpoints return data across ALL pairs (existing behaviour).
+
+---
+
+#### Step 7 — Flyway migration `V3__add_pair_index.sql`
+
+No schema changes needed — `pair` column already exists on all tables. Just add a composite index to keep queries fast as data grows:
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_positions_pair_strategy
+    ON trading.positions (pair, strategy_name, status);
+
+CREATE INDEX IF NOT EXISTS idx_trades_pair_strategy
+    ON trading.trades (pair, strategy_name, executed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_signal_logs_pair_strategy
+    ON trading.signal_logs (pair, strategy_name, created_at DESC);
+```
+
+---
+
+#### Milestone
+12 virtual portfolios (4 strategies × 3 pairs) run every 30 seconds. Each has isolated circuit breakers, its own paper balance, and independent P&L tracking. The dashboard shows a pair selector — pick BTC-EUR, ETH-EUR, or SOL-EUR to view that pair's strategy comparison.
+
+---
+
+### FINAL Phase — Live Trading
+
+**Prerequisites before enabling LIVE mode:**
+- All 4 strategies have run in paper mode for at least 2–4 weeks across all pairs
+- At least one strategy shows consistent positive expectancy (>€0 per trade)
+- Win rate is stable (not improving just from luck — check sample size)
+- You understand the worst drawdown and are comfortable with it in real money terms
+
+**What needs to be built:**
+- `LiveTradingService` — real Revolut X order placement via `POST /orders`
+  - Market order on BUY: `{ "order_configuration": { "market": { "quote_size": "100.00" } } }`
+  - Market order on SELL: closes position at market price
+  - Stores `venue_order_id` on `Position` for order tracking
+- `GET /orders/{venue_order_id}` polling — confirm fill before recording position as OPEN
+- TP/SL as real Revolut limit orders (so positions close even if app is offline — gap risk fix)
+- `trading.mode: LIVE` switch in application.yml — `OrderExecutionService` routes to `LiveTradingService`
+- Start with absolute minimum position sizes (€10–25 per trade)
+- Paper and Live can run on different pairs simultaneously during transition
+
+**Safety rules that must hold in LIVE mode:**
+- NEVER place a real order without logging the full request first
+- NEVER bypass the risk manager — `validate()` must return approved before any order
+- NEVER risk more than `max-position-pct` per trade
+- Circuit breakers apply to LIVE positions too — no exceptions
+- **Milestone:** Real trades with real money, backed by weeks of validated paper performance
 
 ---
 

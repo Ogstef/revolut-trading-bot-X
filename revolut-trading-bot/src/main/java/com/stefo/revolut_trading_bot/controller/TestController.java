@@ -16,23 +16,30 @@ import com.stefo.revolut_trading_bot.model.dto.TickerResponse;
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.entity.SignalLog;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
+import com.stefo.revolut_trading_bot.portfolio.PortfolioSnapshot;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
+import com.stefo.revolut_trading_bot.model.enums.OrderSide;
+import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
+import com.stefo.revolut_trading_bot.risk.RiskValidationResult;
 import com.stefo.revolut_trading_bot.strategy.Signal;
 import com.stefo.revolut_trading_bot.strategy.SignalEngine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URI;
+import java.util.Optional;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -233,7 +240,7 @@ public class TestController {
     @GetMapping("/risk/validate")
     public ResponseEntity<Map<String, Object>> riskValidate(
             @RequestParam(defaultValue = "1000") BigDecimal balance) {
-        var result = riskManager.validate(balance);
+        RiskValidationResult result = riskManager.validate(balance);
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("approved", result.approved());
         map.put("reason", result.reason());
@@ -261,7 +268,7 @@ public class TestController {
         BigDecimal currentPrice = marketDataService.getCurrentPrice();
 
         orderExecutionService.monitorPositions(currentPrice);
-        var position = orderExecutionService.executeSignal(signal, balance, currentPrice);
+        Optional<Position> position = orderExecutionService.executeSignal(signal, balance, currentPrice);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("signal", signalToMap(signal));
@@ -312,11 +319,82 @@ public class TestController {
         return ResponseEntity.ok(tradeService.getStats());
     }
 
+    // ─── Multi-strategy test endpoints (Phase 7) ─────────────────────────────
+
+    /**
+     * Returns recent signal logs filtered to a single strategy.
+     * GET /test/signals/by-strategy?strategy=MACD&limit=20
+     */
+    @GetMapping("/signals/by-strategy")
+    public ResponseEntity<List<SignalLog>> signalsByStrategy(
+            @RequestParam StrategyType strategy,
+            @RequestParam(defaultValue = "20") int limit) {
+        log.info("TEST: fetching last {} signals for strategy={}", limit, strategy);
+        return ResponseEntity.ok(signalEngine.recentSignalsForStrategy(strategy, limit));
+    }
+
+    /**
+     * BUY/SELL/HOLD signal counts broken down per strategy.
+     * GET /test/signals/strategy-summary
+     */
+    @GetMapping("/signals/strategy-summary")
+    public ResponseEntity<Map<String, Object>> signalStrategySummary() {
+        log.info("TEST: fetching signal strategy summary");
+        Map<String, Integer> rows = signalEngine.registeredStrategies().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        StrategyType::name,
+                        strategyType -> signalEngine.recentSignalsForStrategy(strategyType, 100).size()
+                ));
+        return ResponseEntity.ok(Map.of("strategyCounts", rows));
+    }
+
+    /**
+     * Portfolio snapshot scoped to a single strategy.
+     * GET /test/strategies/{strategyType}/snapshot
+     */
+    @GetMapping("/strategies/{strategyType}/snapshot")
+    public ResponseEntity<PortfolioSnapshot> strategySnapshot(@PathVariable StrategyType strategyType) {
+        BigDecimal currentPrice = marketDataService.getCurrentPrice();
+        List<Position> openPositions = positionRepository.findByStatusAndStrategyName(
+                OrderStatus.OPEN, strategyType);
+
+        BigDecimal totalInvested = openPositions.stream()
+                .map(p -> p.getEntryPrice().multiply(p.getQuantity()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal unrealisedPnl = openPositions.stream()
+                .map(p -> {
+                    BigDecimal diff = currentPrice.subtract(p.getEntryPrice());
+                    if (p.getSide() == OrderSide.SELL) {
+                        diff = diff.negate();
+                    }
+                    return diff.multiply(p.getQuantity());
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal unrealisedPnlPct = totalInvested.compareTo(BigDecimal.ZERO) == 0
+                ? BigDecimal.ZERO
+                : unrealisedPnl.divide(totalInvested, 8, RoundingMode.HALF_UP)
+                        .multiply(BigDecimal.valueOf(100))
+                        .setScale(4, RoundingMode.HALF_UP);
+
+        return ResponseEntity.ok(new PortfolioSnapshot(
+                tradingConfig.primaryPair() + " [" + strategyType.getDisplayName() + "]",
+                openPositions.size(),
+                totalInvested.setScale(2, RoundingMode.HALF_UP),
+                unrealisedPnl.setScale(2, RoundingMode.HALF_UP),
+                unrealisedPnlPct,
+                currentPrice,
+                java.time.Instant.now()
+        ));
+    }
+
     private Map<String, Object> signalToMap(Signal signal) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("signal", signal.type());
         result.put("confidence", signal.confidence());
         result.put("pair", signal.pair());
+        result.put("strategyType", signal.strategyType());
         result.put("evaluatedAt", signal.evaluatedAt().toString());
         result.put("reason", signal.reason());
         result.put("emaShort", signal.emaShort());

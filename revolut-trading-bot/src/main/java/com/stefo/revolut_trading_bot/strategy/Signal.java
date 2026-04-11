@@ -1,6 +1,7 @@
 package com.stefo.revolut_trading_bot.strategy;
 
 import com.stefo.revolut_trading_bot.model.enums.SignalType;
+import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -17,9 +18,10 @@ public record Signal(
         BigDecimal confidence,   // 0 – 100; higher = stronger conviction
         String reason,
         String pair,             // e.g. "BTC-EUR" — which market this signal is for
+        StrategyType strategyType,   // which strategy produced this signal
         Instant evaluatedAt,     // when the signal was computed (UTC)
-        BigDecimal emaShort,
-        BigDecimal emaLong,
-        BigDecimal rsi,
+        BigDecimal emaShort,     // repurposed per-strategy: MACD line / upper band / null
+        BigDecimal emaLong,      // repurposed per-strategy: signal line / lower band / null
+        BigDecimal rsi,          // repurposed per-strategy: histogram / %B / RSI value
         BigDecimal currentPrice
 ) {}

@@ -2,9 +2,9 @@ package com.stefo.revolut_trading_bot.execution;
 
 import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.model.entity.Position;
-import com.stefo.revolut_trading_bot.model.entity.Trade;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.SignalType;
+import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
 import com.stefo.revolut_trading_bot.risk.RiskValidationResult;
@@ -24,9 +24,10 @@ import java.util.Optional;
  *
  * Responsibilities:
  *   1. executeSignal() — opens or closes a position based on the incoming signal
- *   2. monitorPositions() — checks all open positions against TP/SL on each cycle
+ *   2. monitorPositions() — checks open positions for the given (pair, strategy) against TP/SL
  *
- * In Phase 4, only PAPER mode is wired. LiveTradingService is added in Phase 7.
+ * From Phase 8, all queries are scoped to a specific pair so that BTC-EUR and ETH-EUR
+ * positions are fully isolated even when using the same strategy.
  */
 @Slf4j
 @Service
@@ -34,42 +35,43 @@ import java.util.Optional;
 @Transactional(readOnly = true)
 public class OrderExecutionService {
 
-    private final RiskManager riskManager;
-    private final PaperTradingService paperTradingService;
+    private final RiskManager             riskManager;
+    private final PaperTradingService     paperTradingService;
     private final TakeProfitStopLossManager tpslManager;
-    private final PositionRepository positionRepository;
-    private final TradingConfig config;
+    private final PositionRepository      positionRepository;
+    private final TradingConfig           config;
 
     /**
-     * Processes a signal:
-     *  - BUY  → validates risk, opens a new position if approved
-     *  - SELL → closes any open position via SIGNAL_EXIT (in addition to TP/SL monitoring)
+     * Processes a signal using (pair, strategy)-scoped risk validation.
+     *  - BUY  → validates risk, opens position if approved
+     *  - SELL → closes all open positions for this (pair, strategy)
      *  - HOLD → no action
      *
-     * @param signal           evaluated trading signal
-     * @param availableBalance current EUR balance (real or paper)
-     * @param currentPrice     current BTC-EUR market price
-     * @return the opened Position, or empty if HOLD/risk rejected/SELL with nothing to close
+     * @param signal           evaluated signal (carries pair and strategyType)
+     * @param availableBalance EUR balance allocated to this (pair, strategy)
+     * @param currentPrice     current market price for this pair
      */
     @Transactional
     public Optional<Position> executeSignal(Signal signal, BigDecimal availableBalance,
                                             BigDecimal currentPrice) {
-        log.info("ExecuteSignal: {} pair={} price={}", signal.type(), signal.pair(), currentPrice);
+        String pair          = signal.pair();
+        StrategyType strategy = signal.strategyType();
+        log.info("ExecuteSignal: {} pair={} strategy={} price={}", signal.type(), pair, strategy, currentPrice);
 
         if (signal.type() == SignalType.HOLD) {
-            log.debug("Signal is HOLD — no action");
+            log.debug("Signal is HOLD — no action [pair={} strategy={}]", pair, strategy);
             return Optional.empty();
         }
 
         if (signal.type() == SignalType.SELL) {
-            closeAllOpenPositions(currentPrice, TakeProfitStopLossManager.EXIT_SIGNAL);
+            closePositions(pair, strategy, currentPrice, TakeProfitStopLossManager.EXIT_SIGNAL);
             return Optional.empty();
         }
 
-        // BUY — run risk checks first
-        RiskValidationResult risk = riskManager.validate(availableBalance);
+        // BUY — run (pair, strategy)-scoped risk checks
+        RiskValidationResult risk = riskManager.validateForStrategy(availableBalance, pair, strategy);
         if (!risk.approved()) {
-            log.info("Trade blocked by risk manager: {}", risk.reason());
+            log.info("Trade blocked by risk manager [pair={} strategy={}]: {}", pair, strategy, risk.reason());
             return Optional.empty();
         }
 
@@ -78,19 +80,36 @@ public class OrderExecutionService {
     }
 
     /**
-     * Scans all open positions and closes any that have hit their TP or SL.
-     * Call this on every trading loop cycle before processing new signals.
+     * Scans open positions for the given (pair, strategy) and closes any that hit TP/SL.
      *
-     * @param currentPrice current BTC-EUR market price
+     * @param currentPrice current market price for this pair
+     * @param pair         only positions for this pair are checked
+     * @param strategyName only positions tagged with this strategy are checked
+     */
+    @Transactional
+    public void monitorPositions(BigDecimal currentPrice, String pair, StrategyType strategyName) {
+        List<Position> open = positionRepository
+                .findByStatusAndPairAndStrategyName(OrderStatus.OPEN, pair, strategyName);
+        checkAndClosePositions(open, currentPrice);
+    }
+
+    /**
+     * Scans ALL open positions (all pairs, all strategies) for TP/SL.
+     * Kept for legacy callers and test endpoints.
      */
     @Transactional
     public void monitorPositions(BigDecimal currentPrice) {
         List<Position> open = positionRepository.findByStatus(OrderStatus.OPEN);
+        checkAndClosePositions(open, currentPrice);
+    }
+
+    // ─── Private helpers ──────────────────────────────────────────────────────
+
+    private void checkAndClosePositions(List<Position> open, BigDecimal currentPrice) {
         if (open.isEmpty()) {
             return;
         }
         log.debug("Monitoring {} open position(s) at price={}", open.size(), currentPrice);
-
         for (Position position : open) {
             tpslManager.checkExitCondition(position, currentPrice).ifPresent(exitReason ->
                     paperTradingService.closePosition(position, currentPrice, exitReason)
@@ -98,15 +117,16 @@ public class OrderExecutionService {
         }
     }
 
-    // ─── Private helpers ──────────────────────────────────────────────────────
-
-    private void closeAllOpenPositions(BigDecimal currentPrice, String exitReason) {
-        List<Position> open = positionRepository.findByStatus(OrderStatus.OPEN);
+    private void closePositions(String pair, StrategyType strategyName,
+                                BigDecimal currentPrice, String exitReason) {
+        List<Position> open = positionRepository
+                .findByStatusAndPairAndStrategyName(OrderStatus.OPEN, pair, strategyName);
         if (open.isEmpty()) {
-            log.debug("SELL signal — no open positions to close");
+            log.debug("SELL signal — no open positions to close [pair={} strategy={}]", pair, strategyName);
             return;
         }
-        log.info("SELL signal — closing {} open position(s)", open.size());
+        log.info("SELL signal — closing {} open position(s) [pair={} strategy={}]",
+                open.size(), pair, strategyName);
         open.forEach(p -> paperTradingService.closePosition(p, currentPrice, exitReason));
     }
 }

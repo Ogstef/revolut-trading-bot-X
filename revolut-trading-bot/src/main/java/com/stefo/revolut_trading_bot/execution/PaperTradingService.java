@@ -60,13 +60,14 @@ public class PaperTradingService {
         BigDecimal stopLoss   = tpslManager.calculateStopLoss(currentPrice);
 
         Position position = Position.builder()
-                .pair(config.getPair())
+                .pair(signal.pair())
                 .side(side)
                 .entryPrice(currentPrice)
                 .quantity(quantity)
                 .takeProfit(takeProfit)
                 .stopLoss(stopLoss)
                 .status(OrderStatus.OPEN)
+                .strategyName(signal.strategyType())
                 .signalReason(signal.reason())
                 .build();
         positionRepository.save(position);
@@ -74,10 +75,11 @@ public class PaperTradingService {
         // Open trade record — exitPrice / pnl filled in when position closes
         Trade trade = Trade.builder()
                 .position(position)
-                .pair(config.getPair())
+                .pair(signal.pair())
                 .side(side)
                 .entryPrice(currentPrice)
                 .quantity(quantity)
+                .strategyName(signal.strategyType())
                 .tradingMode(TradingMode.PAPER)
                 .build();
         tradeRepository.save(trade);
@@ -109,6 +111,7 @@ public class PaperTradingService {
         trade.setPnl(pnl);
         trade.setPnlPct(pnlPct);
         trade.setExitReason(exitReason);
+        trade.setClosedAt(LocalDateTime.now());
         tradeRepository.save(trade);
 
         position.setStatus(OrderStatus.CLOSED);

@@ -2,6 +2,7 @@ package com.stefo.revolut_trading_bot.model.entity;
 
 import com.stefo.revolut_trading_bot.model.enums.OrderSide;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
+import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -46,6 +47,10 @@ public class Position {
     @Builder.Default
     private OrderStatus status = OrderStatus.OPEN;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "strategy_name", nullable = false, length = 50)
+    private StrategyType strategyName;
+
     @Column(name = "signal_reason")
     private String signalReason;
 
@@ -60,5 +65,6 @@ public class Position {
     @Builder.Default
     @ToString.Exclude
     @EqualsAndHashCode.Exclude
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private List<Trade> trades = new ArrayList<>();
 }

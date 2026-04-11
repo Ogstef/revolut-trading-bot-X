@@ -17,7 +17,9 @@ import org.ta4j.core.num.DecimalNum;
 import java.math.BigDecimal;
 import java.time.*;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
@@ -25,51 +27,89 @@ import java.util.Optional;
 public class MarketDataService {
 
     // 15-minute candles — interval must be an integer (minutes), not a string like "15m"
-    private static final int CANDLE_INTERVAL_MINUTES = 15;
-    private static final String CANDLE_INTERVAL_LABEL = "15m";
-    private static final Duration BAR_DURATION = Duration.ofMinutes(CANDLE_INTERVAL_MINUTES);
+    private static final int      CANDLE_INTERVAL_MINUTES = 15;
+    private static final String   CANDLE_INTERVAL_LABEL   = "15m";
+    private static final Duration BAR_DURATION            = Duration.ofMinutes(CANDLE_INTERVAL_MINUTES);
 
-    private final MarketDataClient marketDataClient;
+    private final MarketDataClient     marketDataClient;
     private final CandlestickRepository candlestickRepository;
-    private final TradingConfig tradingConfig;
+    private final TradingConfig        tradingConfig;
 
-    private BarSeries barSeries;
+    // One BarSeries per pair — updated on each cycle when candles are fetched.
+    // ConcurrentHashMap because the trading loop and potential REST reads run on different threads.
+    private final Map<String, BarSeries> barSeriesMap = new ConcurrentHashMap<>();
 
-    public BarSeries fetchAndBuildBarSeries() {
-        String pair = tradingConfig.getPair();
+    // ─── Public API ──────────────────────────────────────────────────────────
+
+    /**
+     * Fetches the latest candles for the given pair from the Revolut API,
+     * persists new/updated candles, rebuilds the BarSeries, and caches it.
+     *
+     * @param pair trading pair e.g. "BTC-EUR"
+     * @return the freshly built BarSeries for this pair
+     */
+    public BarSeries fetchBarSeriesForPair(String pair) {
         log.info("Fetching candles for {} interval {}m", pair, CANDLE_INTERVAL_MINUTES);
 
         List<CandleResponse> candles = marketDataClient.getCandles(pair, CANDLE_INTERVAL_MINUTES);
-        log.info("Received {} candles from API", candles.size());
+        log.info("[{}] Received {} candles from API", pair, candles.size());
 
         persistCandles(candles, pair);
-        barSeries = buildBarSeries(pair);
 
-        log.info("BarSeries built with {} bars", barSeries.getBarCount());
-        return barSeries;
-    }
+        BarSeries series = buildBarSeries(pair);
+        barSeriesMap.put(pair, series);
 
-    public BarSeries getBarSeries() {
-        if (barSeries == null) {
-            return buildBarSeriesFromDb();
-        }
-        return barSeries;
+        log.info("[{}] BarSeries built with {} bars", pair, series.getBarCount());
+        return series;
     }
 
     /**
-     * Returns the latest price. Uses in-memory BarSeries if available,
-     * otherwise fetches a live ticker from the API (cheaper than a full candle fetch).
+     * Returns the cached BarSeries for the given pair.
+     * Falls back to reading from the DB if no in-memory series exists yet.
      */
-    public BigDecimal getCurrentPrice() {
-        if (barSeries != null && barSeries.getBarCount() > 0) {
-            Bar lastBar = barSeries.getLastBar();
-            return BigDecimal.valueOf(lastBar.getClosePrice().doubleValue());
+    public BarSeries getBarSeriesForPair(String pair) {
+        BarSeries cached = barSeriesMap.get(pair);
+        if (cached != null) {
+            return cached;
         }
-        return fetchCurrentPriceFromTicker();
+        log.debug("[{}] No cached BarSeries — building from DB", pair);
+        BarSeries series = buildBarSeriesFromDb(pair);
+        barSeriesMap.put(pair, series);
+        return series;
     }
 
-    private BigDecimal fetchCurrentPriceFromTicker() {
-        String pair = tradingConfig.getPair();
+    /**
+     * Returns the current market price for the given pair.
+     * Uses the last close from the cached BarSeries if available;
+     * falls back to a live ticker API call (cheaper than a full candle fetch).
+     */
+    public BigDecimal getCurrentPriceForPair(String pair) {
+        BarSeries series = barSeriesMap.get(pair);
+        if (series != null && series.getBarCount() > 0) {
+            return BigDecimal.valueOf(series.getLastBar().getClosePrice().doubleValue());
+        }
+        return fetchCurrentPriceFromTicker(pair);
+    }
+
+    /**
+     * Convenience method for callers that don't have explicit pair context.
+     * Delegates to the primary (first) configured pair.
+     */
+    public BigDecimal getCurrentPrice() {
+        return getCurrentPriceForPair(tradingConfig.primaryPair());
+    }
+
+    /**
+     * Returns the cached BarSeries for the primary pair.
+     * Used by test endpoints and backward-compatible callers.
+     */
+    public BarSeries getBarSeries() {
+        return getBarSeriesForPair(tradingConfig.primaryPair());
+    }
+
+    // ─── Private helpers ─────────────────────────────────────────────────────
+
+    private BigDecimal fetchCurrentPriceFromTicker(String pair) {
         List<TickerResponse> tickers = marketDataClient.getTickers(pair);
         if (tickers.isEmpty()) {
             log.warn("No ticker data available for {}", pair);
@@ -77,7 +117,7 @@ public class MarketDataService {
         }
         // Use mid-price (average of best bid/ask) as a neutral current price reference
         BigDecimal mid = tickers.getFirst().mid();
-        log.debug("Current price from ticker mid: {}", mid);
+        log.debug("[{}] Current price from ticker mid: {}", pair, mid);
         return mid;
     }
 
@@ -114,26 +154,25 @@ public class MarketDataService {
                 candlestickRepository.save(entity);
             }
         }
-        log.debug("Candle sync: {} new, {} updated", newCount, candles.size() - newCount);
+        log.debug("[{}] Candle sync: {} new, {} updated", pair, newCount, candles.size() - newCount);
     }
 
     private BarSeries buildBarSeries(String pair) {
         List<Candlestick> candles = candlestickRepository
                 .findByPairAndIntervalOrderByTimestampAsc(pair, CANDLE_INTERVAL_LABEL);
-        return buildBarSeriesFromCandles(candles);
+        return buildBarSeriesFromCandles(pair, candles);
     }
 
-    private BarSeries buildBarSeriesFromDb() {
-        String pair = tradingConfig.getPair();
+    private BarSeries buildBarSeriesFromDb(String pair) {
         List<Candlestick> candles = candlestickRepository
                 .findByPairAndIntervalOrderByTimestampAsc(pair, CANDLE_INTERVAL_LABEL);
-        barSeries = buildBarSeriesFromCandles(candles);
-        log.info("BarSeries built from DB with {} bars", barSeries.getBarCount());
-        return barSeries;
+        BarSeries series = buildBarSeriesFromCandles(pair, candles);
+        log.info("[{}] BarSeries built from DB with {} bars", pair, series.getBarCount());
+        return series;
     }
 
-    private BarSeries buildBarSeriesFromCandles(List<Candlestick> candles) {
-        BaseBarSeries series = new BaseBarSeries(tradingConfig.getPair());
+    private BarSeries buildBarSeriesFromCandles(String pair, List<Candlestick> candles) {
+        BaseBarSeries series = new BaseBarSeries(pair);
         for (Candlestick c : candles) {
             ZonedDateTime endTime = c.getTimestamp().atZone(ZoneOffset.UTC).plus(BAR_DURATION);
             Bar bar = BaseBar.builder()

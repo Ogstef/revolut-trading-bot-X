@@ -4,8 +4,9 @@ import com.stefo.revolut_trading_bot.alert.AlertService;
 import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.execution.OrderExecutionService;
 import com.stefo.revolut_trading_bot.market.MarketDataClient;
+import com.stefo.revolut_trading_bot.market.MarketDataService;
 import com.stefo.revolut_trading_bot.model.dto.BalanceResponse;
-import com.stefo.revolut_trading_bot.portfolio.PortfolioService;
+import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
 import com.stefo.revolut_trading_bot.strategy.Signal;
 import com.stefo.revolut_trading_bot.strategy.SignalEngine;
@@ -16,17 +17,19 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Main trading heartbeat — runs every N seconds (configured via trading.polling-interval-seconds).
  *
- * Cycle order matters:
- *   1. Evaluate signal  — fetch fresh candles + run strategy (also updates bar series)
- *   2. Monitor TP/SL    — check open positions BEFORE acting on new signal
- *                         (a position may have already hit SL even if signal says HOLD)
- *   3. Resolve balance  — PAPER mode uses trading.paper-balance; LIVE mode fetches real EUR balance
- *   4. Execute signal   — open/close positions based on signal + risk approval
- *   5. Log portfolio    — snapshot of current state for visibility
+ * From Phase 8, the cycle structure is:
+ *   1. Evaluate signals for ALL pairs × ALL strategies (candles fetched once per pair)
+ *   2. Group signals by pair
+ *   3. For each pair: for each strategy signal → monitor TP/SL → execute signal
+ *
+ * Each (pair, strategy) combination has its own isolated circuit breakers, balance, and positions.
+ * A bad cycle for BTC-EUR/EMA_CROSSOVER never blocks ETH-EUR/MACD.
  *
  * All exceptions are caught and logged — a bad cycle never stops future cycles.
  */
@@ -37,17 +40,15 @@ public class TradingLoop {
 
     private static final String MODE_PAPER = "PAPER";
 
-    private final SignalEngine signalEngine;
+    private final SignalEngine          signalEngine;
     private final OrderExecutionService orderExecutionService;
-    private final RiskManager riskManager;
-    private final PortfolioService portfolioService;
-    private final MarketDataClient marketDataClient;
-    private final TradingConfig tradingConfig;
-    private final BotStateService botStateService;
-    private final AlertService alertService;
+    private final RiskManager           riskManager;
+    private final MarketDataService     marketDataService;
+    private final MarketDataClient      marketDataClient;
+    private final TradingConfig         tradingConfig;
+    private final BotStateService       botStateService;
+    private final AlertService          alertService;
 
-    // fixedDelay means: wait N seconds AFTER the previous cycle finishes before starting the next.
-    // This avoids overlap if a cycle takes longer than the interval (e.g. slow API response).
     @Scheduled(fixedDelayString = "#{${trading.polling-interval-seconds:30} * 1000}")
     public void run() {
         if (!botStateService.isActive()) {
@@ -66,52 +67,72 @@ public class TradingLoop {
     private void runCycle() {
         log.info("══════════ Trading cycle start ══════════");
 
-        // Step 1: evaluate signal (fetches fresh candles + runs EMA/RSI strategy)
-        Signal signal = signalEngine.evaluateAndPersist();
-        BigDecimal currentPrice = signal.currentPrice();
-        log.info("Signal: {} | price: {} | reason: {}", signal.type(), currentPrice, signal.reason());
+        // Step 1: fetch candles ONCE per pair — all strategies share the same BarSeries per pair
+        List<Signal> allSignals = signalEngine.evaluateAllPairsAndPersist();
+        log.info("Evaluated {} strategies across {} pairs — {} total signals",
+                signalEngine.registeredStrategies().size(),
+                tradingConfig.getPairs().size(),
+                allSignals.size());
 
-        // Step 2: check TP/SL on all open positions (runs regardless of signal type)
-        orderExecutionService.monitorPositions(currentPrice);
+        // Step 2: group signals by pair for clean pair-level logging
+        Map<String, List<Signal>> signalsByPair = allSignals.stream()
+                .collect(Collectors.groupingBy(Signal::pair));
 
-        // Step 3: resolve balance — paper uses configured fake money, live uses real Revolut balance
-        BigDecimal balance = resolveBalance();
-        log.info("Balance: {} EUR [mode={}]", balance, tradingConfig.getMode());
-
-        // Step 4: log risk state so circuit breakers are visible in logs
-        RiskManager.RiskStatus riskStatus = riskManager.currentStatus(balance);
-        log.info("Risk — openPositions: {} | dailyPnl: {} | consecutiveLosses: {} | circuitBreaker: {}",
-                riskStatus.openPositions(), riskStatus.dailyPnl(),
-                riskStatus.consecutiveLosses(), riskStatus.anyCircuitBreakerTripped());
-
-        if (riskStatus.anyCircuitBreakerTripped()) {
-            log.warn("⚠ Circuit breaker active — skipping trade execution this cycle");
-            alertService.circuitBreakerTripped("openPositions=" + riskStatus.openPositions()
-                    + " dailyPnl=" + riskStatus.dailyPnl()
-                    + " consecutiveLosses=" + riskStatus.consecutiveLosses());
-        }
-
-        // Step 5: execute signal (RiskManager re-validates internally before opening)
-        orderExecutionService.executeSignal(signal, balance, currentPrice);
-
-        // Step 6: log portfolio snapshot
-        var snapshot = portfolioService.getSnapshot(currentPrice);
-        log.info("Portfolio — openPositions: {} | invested: {} EUR | unrealisedPnl: {} EUR ({}%)",
-                snapshot.openPositions(), snapshot.totalInvested(),
-                snapshot.unrealisedPnl(), snapshot.unrealisedPnlPct());
+        // Step 3: per-pair, per-strategy execution — fully isolated
+        signalsByPair.forEach((pair, signals) -> {
+            BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(pair);
+            log.info("[{}] Price: {}", pair, currentPrice);
+            signals.forEach(signal -> runStrategyExecution(signal, currentPrice));
+        });
 
         log.info("══════════ Trading cycle end ══════════");
     }
 
+    private void runStrategyExecution(Signal signal, BigDecimal currentPrice) {
+        String pair              = signal.pair();
+        StrategyType strategyName = signal.strategyType();
+        log.info("[{}][{}] Signal: {} | reason: {}", pair, strategyName, signal.type(), signal.reason());
+
+        // Monitor TP/SL only for this (pair, strategy)'s open positions
+        orderExecutionService.monitorPositions(currentPrice, pair, strategyName);
+
+        // Resolve balance — each (pair, strategy) has its own virtual paper balance
+        BigDecimal balance = resolveBalanceForStrategy(pair, strategyName);
+        log.info("[{}][{}] Balance: {} EUR", pair, strategyName, balance);
+
+        // Log (pair, strategy)-scoped risk state
+        RiskManager.RiskStatus riskStatus = riskManager.currentStatusForStrategy(balance, pair, strategyName);
+        log.info("[{}][{}] Risk — openPositions: {} | dailyPnl: {} | consecutiveLosses: {} | circuitBreaker: {}",
+                pair, strategyName, riskStatus.openPositions(), riskStatus.dailyPnl(),
+                riskStatus.consecutiveLosses(), riskStatus.anyCircuitBreakerTripped());
+
+        if (riskStatus.anyCircuitBreakerTripped()) {
+            log.warn("[{}][{}] ⚠ Circuit breaker active — skipping trade execution", pair, strategyName);
+            alertService.circuitBreakerTripped(pair + "/" + strategyName
+                    + " openPositions=" + riskStatus.openPositions()
+                    + " dailyPnl=" + riskStatus.dailyPnl()
+                    + " consecutiveLosses=" + riskStatus.consecutiveLosses());
+            return;
+        }
+
+        orderExecutionService.executeSignal(signal, balance, currentPrice);
+    }
+
     /**
-     * In PAPER mode: returns the configured paper balance (trading.paper-balance).
-     * In LIVE mode:  fetches the real EUR balance from the Revolut API.
-     *
-     * This keeps paper runs completely independent of your real account balance,
-     * letting you test with any amount (e.g. €1,000, €10,000, €100,000).
+     * Resolves the effective balance for a given (pair, strategy):
+     *   - LIVE mode → real EUR balance from Revolut API
+     *   - PAPER     → balance from trading.strategy-balances[pair][strategy],
+     *                 falling back to trading.paper-balance if not configured
      */
-    private BigDecimal resolveBalance() {
+    private BigDecimal resolveBalanceForStrategy(String pair, StrategyType strategyType) {
         if (MODE_PAPER.equalsIgnoreCase(tradingConfig.getMode())) {
+            Map<String, Map<StrategyType, BigDecimal>> allBalances = tradingConfig.getStrategyBalances();
+            if (allBalances != null) {
+                Map<StrategyType, BigDecimal> pairBalances = allBalances.get(pair);
+                if (pairBalances != null && pairBalances.containsKey(strategyType)) {
+                    return pairBalances.get(strategyType);
+                }
+            }
             return tradingConfig.getPaperBalance();
         }
         return fetchRealEurBalance();

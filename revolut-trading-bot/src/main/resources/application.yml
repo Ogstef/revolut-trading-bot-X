@@ -35,10 +35,27 @@ management:
       show-details: always
 
 trading:
-  pair: BTC-EUR
+  pairs: [BTC-EUR, ETH-EUR, SOL-EUR]  # all active trading pairs; first entry is the primary pair
   mode: PAPER
   polling-interval-seconds: 30
-  paper-balance: 10000.00   # simulated EUR balance for PAPER mode — change this to test different sizes
+  paper-balance: 10000.00              # fallback balance used when a pair/strategy is not listed below
+  primary-strategy: EMA_CROSSOVER      # which strategy drives the legacy /api/status metrics
+  strategy-balances:                   # nested: pair → strategy → starting EUR balance
+    BTC-EUR:
+      EMA_CROSSOVER: 10000.00
+      MACD: 10000.00
+      BOLLINGER: 10000.00
+      RSI_MOMENTUM: 10000.00
+    ETH-EUR:
+      EMA_CROSSOVER: 5000.00
+      MACD: 5000.00
+      BOLLINGER: 5000.00
+      RSI_MOMENTUM: 5000.00
+    SOL-EUR:
+      EMA_CROSSOVER: 5000.00
+      MACD: 5000.00
+      BOLLINGER: 5000.00
+      RSI_MOMENTUM: 5000.00
   strategy:
     ema-short-period: 9
     ema-long-period: 21

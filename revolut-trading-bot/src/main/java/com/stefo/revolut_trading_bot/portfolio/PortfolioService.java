@@ -59,7 +59,7 @@ public class PortfolioService {
                 open.size(), totalInvested, unrealisedPnl);
 
         return new PortfolioSnapshot(
-                config.getPair(),
+                config.primaryPair(),
                 open.size(),
                 totalInvested.setScale(2, RoundingMode.HALF_UP),
                 unrealisedPnl.setScale(2, RoundingMode.HALF_UP),
