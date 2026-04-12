@@ -507,7 +507,175 @@ Four strategies run every 30s on the same candle data. Each has its own position
 
 ---
 
-### Phase 8 — Multi-Pair Support
+### Phase 8 — Additional Strategies (Tier 1 + Tier 2)
+
+**Goal:** Add 5 more strategies to the parallel engine. All plug into the existing architecture — implement `TradingStrategy`, add to `StrategyType`, done. No migrations needed (strategy_name column already exists).
+
+---
+
+#### Step 1 — Add to `StrategyType` enum
+
+```java
+EMA_CROSSOVER("EMA Crossover"),
+MACD("MACD"),
+BOLLINGER("Bollinger Bands"),
+RSI_MOMENTUM("RSI Momentum"),
+// Tier 1 — add now
+STOCH_RSI("Stochastic RSI"),
+TRIPLE_EMA("Triple EMA"),
+PARABOLIC_SAR("Parabolic SAR"),
+// Tier 2 — add now too, implement same session
+ADX_DI("ADX + Directional Index"),
+CCI("CCI");
+```
+
+---
+
+#### Step 2 — Add per-strategy balances to `application.yml`
+
+```yaml
+trading:
+  strategy-balances:
+    # existing
+    EMA_CROSSOVER: 10000.00
+    MACD: 10000.00
+    BOLLINGER: 10000.00
+    RSI_MOMENTUM: 10000.00
+    # new
+    STOCH_RSI: 10000.00
+    TRIPLE_EMA: 10000.00
+    PARABOLIC_SAR: 10000.00
+    ADX_DI: 10000.00
+    CCI: 10000.00
+```
+
+---
+
+#### Step 3 — Implement strategies (all in `strategy/impl/`)
+
+All strategies follow the same pattern as existing ones: `@Component`, `@RequiredArgsConstructor`, implement `TradingStrategy`. The `Signal` record's `emaShort`/`emaLong`/`rsi` fields are repurposed to carry the most useful indicator values for each strategy — documented below so the frontend knows what to display.
+
+---
+
+**`StochRsiStrategy` — name: `STOCH_RSI`**
+
+RSI applied to RSI — faster and more sensitive than plain RSI. Catches short-term reversals.
+
+```java
+// Ta4j classes:
+RSIIndicator rsi = new RSIIndicator(close, 14);
+StochasticRSIIndicator stochRsi = new StochasticRSIIndicator(rsi, 14);
+// stochRsi value is 0.0–1.0 — multiply by 100 for display
+```
+
+- BUY: stochRsi crosses above 0.20 (prev < 0.20, current ≥ 0.20)
+- SELL: stochRsi crosses above 0.80 (prev < 0.80, current ≥ 0.80)
+- HOLD: else
+
+Signal field mapping:
+- `emaShort` = stochRsi value × 100 (0–100 scale for display)
+- `emaLong` = null
+- `rsi` = underlying RSI value
+
+---
+
+**`TripleEmaStrategy` — name: `TRIPLE_EMA`**
+
+Three EMAs must all align in the same direction — filters out the false crossovers the 2-EMA strategy suffers from in choppy markets.
+
+```java
+EMAIndicator ema5  = new EMAIndicator(close, 5);
+EMAIndicator ema13 = new EMAIndicator(close, 13);
+EMAIndicator ema34 = new EMAIndicator(close, 34);
+```
+
+- BUY: ema5 > ema13 > ema34 (full bullish stack)
+- SELL: ema5 < ema13 < ema34 (full bearish stack)
+- HOLD: mixed (sideways — no trade)
+
+Signal field mapping:
+- `emaShort` = EMA5 value
+- `emaLong` = EMA34 value
+- `rsi` = EMA13 value (middle — repurposed)
+
+---
+
+**`ParabolicSarStrategy` — name: `PARABOLIC_SAR`**
+
+A trailing dot that flips sides when trend reverses. Completely different signal shape from all existing strategies — clean flips, no oscillators involved.
+
+```java
+// Ta4j class:
+ParabolicSarIndicator sar = new ParabolicSarIndicator(series, new DecimalNum(0.02), new DecimalNum(0.2));
+// 0.02 = acceleration factor start, 0.2 = max acceleration
+```
+
+- BUY: price crosses above SAR (prev close ≤ prev SAR, current close > current SAR)
+- SELL: price crosses below SAR (prev close ≥ prev SAR, current close < current SAR)
+- HOLD: no crossover this bar
+
+Signal field mapping:
+- `emaShort` = current SAR value
+- `emaLong` = null
+- `rsi` = distance between price and SAR as % ((price - SAR) / price × 100)
+
+---
+
+**`AdxDiStrategy` — name: `ADX_DI`**
+
+The only strategy that measures **trend strength** rather than direction. Refuses to trade in choppy, sideways markets — the condition where all other strategies get whipsawed.
+
+```java
+ADXIndicator adx       = new ADXIndicator(series, 14);
+PlusDIIndicator plusDi  = new PlusDIIndicator(series, 14);
+MinusDIIndicator minusDi = new MinusDIIndicator(series, 14);
+```
+
+- BUY: +DI crosses above -DI AND ADX > 25 (strong uptrend confirmed)
+- SELL: -DI crosses above +DI AND ADX > 25 (strong downtrend confirmed)
+- HOLD: ADX < 20 OR no DI crossover (no clear trend — sit out)
+
+Signal field mapping:
+- `emaShort` = +DI value
+- `emaLong` = -DI value
+- `rsi` = ADX value (key number — show prominently in UI)
+
+---
+
+**`CciStrategy` — name: `CCI`**
+
+Commodity Channel Index — measures deviation from a statistical mean. Different oscillator from RSI; better at identifying cyclical turning points.
+
+```java
+CCIIndicator cci = new CCIIndicator(series, 20);
+// Typical range: -200 to +200. Overbought > +100, oversold < -100
+```
+
+- BUY: CCI crosses above −100 (prev < −100, current ≥ −100) — recovering from oversold
+- SELL: CCI crosses above +100 (prev < +100, current ≥ +100) — entering overbought
+- HOLD: else
+
+Signal field mapping:
+- `emaShort` = null
+- `emaLong` = null
+- `rsi` = CCI value (can be outside 0–100 — display as-is)
+
+---
+
+#### Step 4 — No other changes needed
+
+Spring autowires all `TradingStrategy` beans automatically via `List<TradingStrategy>` in `SignalEngine`. Adding `@Component` to each new class is enough — they join the parallel execution loop on the next restart.
+
+Verify with `GET /api/strategies` — all 9 strategy names should appear.
+
+---
+
+#### Milestone
+9 strategies run every 30 seconds on shared candle data. Each has independent positions, circuit breakers, and P&L. The dashboard shows 9 tabs. After several weeks, compare expectancy across all 9 to identify which to keep for multi-pair rollout.
+
+---
+
+### Phase 9 — Multi-Pair Support
 
 **Goal:** Run every strategy on multiple crypto pairs simultaneously. The unit of execution becomes `(pair, strategy)` — e.g. 4 strategies × 3 pairs = 12 independent virtual portfolios, all running in parallel on the same 30-second heartbeat.
 

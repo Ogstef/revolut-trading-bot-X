@@ -46,16 +46,31 @@ trading:
       MACD: 10000.00
       BOLLINGER: 10000.00
       RSI_MOMENTUM: 10000.00
+      STOCH_RSI: 10000.00
+      TRIPLE_EMA: 10000.00
+      PARABOLIC_SAR: 10000.00
+      ADX_DI: 10000.00
+      CCI: 10000.00
     ETH-EUR:
       EMA_CROSSOVER: 5000.00
       MACD: 5000.00
       BOLLINGER: 5000.00
       RSI_MOMENTUM: 5000.00
+      STOCH_RSI: 5000.00
+      TRIPLE_EMA: 5000.00
+      PARABOLIC_SAR: 5000.00
+      ADX_DI: 5000.00
+      CCI: 5000.00
     SOL-EUR:
       EMA_CROSSOVER: 5000.00
       MACD: 5000.00
       BOLLINGER: 5000.00
       RSI_MOMENTUM: 5000.00
+      STOCH_RSI: 5000.00
+      TRIPLE_EMA: 5000.00
+      PARABOLIC_SAR: 5000.00
+      ADX_DI: 5000.00
+      CCI: 5000.00
   strategy:
     ema-short-period: 9
     ema-long-period: 21
@@ -64,7 +79,7 @@ trading:
     rsi-oversold: 30
   risk:
     max-position-pct: 2.0
-    max-concurrent-positions: 3
+    max-concurrent-positions: 1
     max-daily-loss-pct: 5.0
     max-consecutive-losses: 5
     take-profit-pct: 5.0

@@ -16,7 +16,14 @@ public enum StrategyType {
     EMA_CROSSOVER("EMA Crossover"),
     MACD("MACD"),
     BOLLINGER("Bollinger Bands"),
-    RSI_MOMENTUM("RSI Momentum");
+    RSI_MOMENTUM("RSI Momentum"),
+    // Tier 1
+    STOCH_RSI("Stochastic RSI"),
+    TRIPLE_EMA("Triple EMA"),
+    PARABOLIC_SAR("Parabolic SAR"),
+    // Tier 2
+    ADX_DI("ADX + Directional Index"),
+    CCI("CCI");
 
     /** Human-readable label used in logs and API responses. */
     private final String displayName;
