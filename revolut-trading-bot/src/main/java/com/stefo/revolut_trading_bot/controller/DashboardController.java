@@ -17,6 +17,7 @@ import com.stefo.revolut_trading_bot.repository.SignalLogRepository;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
 import com.stefo.revolut_trading_bot.scheduler.BotStateService;
+import com.stefo.revolut_trading_bot.service.*;
 import com.stefo.revolut_trading_bot.strategy.SignalEngine;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -45,15 +46,14 @@ public class DashboardController {
 
     private final BotStateService botStateService;
     private final TradingConfig tradingConfig;
-    private final RiskManager riskManager;
-    private final PortfolioService portfolioService;
     private final TradeService tradeService;
-    private final MarketDataService marketDataService;
-    private final PositionRepository positionRepository;
     private final TradeRepository tradeRepository;
-    private final SignalLogRepository signalLogRepository;
-    private final SignalEngine signalEngine;
     private final AlertService alertService;
+    private final BotStatusService botStatusService;
+    private final PositionService positionService;
+    private final ConfigService configService;
+    private final StrategyService strategyService;
+    private final SignalService signalService;
 
     // ─── Status ───────────────────────────────────────────────────────────────
 
@@ -63,20 +63,7 @@ public class DashboardController {
      */
     @GetMapping("/status")
     public ResponseEntity<BotStatusResponse> status() {
-        BigDecimal balance = tradingConfig.getPaperBalance();
-        RiskManager.RiskStatus risk = riskManager.currentStatus(balance);
-
-        BotStatusResponse response = new BotStatusResponse(
-                botStateService.isActive(),
-                tradingConfig.getMode(),
-                tradingConfig.primaryPair(),
-                risk.openPositions(),
-                risk.dailyPnl(),
-                risk.consecutiveLosses(),
-                risk.anyCircuitBreakerTripped(),
-                Instant.now()
-        );
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(botStatusService.getStatus());
     }
 
     // ─── Positions ────────────────────────────────────────────────────────────
@@ -89,17 +76,7 @@ public class DashboardController {
     @GetMapping("/positions")
     public ResponseEntity<List<PositionView>> positions(
             @RequestParam(required = false) String pair) {
-        List<Position> open = pair != null
-                ? positionRepository.findByPairAndStatus(pair, OrderStatus.OPEN)
-                : positionRepository.findByStatus(OrderStatus.OPEN);
-
-        List<PositionView> views = open.stream()
-                .map(p -> {
-                    BigDecimal price = marketDataService.getCurrentPriceForPair(p.getPair());
-                    return toPositionView(p, price);
-                })
-                .toList();
-        return ResponseEntity.ok(views);
+        return ResponseEntity.ok(positionService.getPositions(pair));
     }
 
     // ─── Trades ───────────────────────────────────────────────────────────────
@@ -173,23 +150,7 @@ public class DashboardController {
     public ResponseEntity<String> updateConfig(@Valid @RequestBody ConfigUpdateRequest req) {
         log.info("Config update requested: {}", req);
 
-        TradingConfig.Risk risk = tradingConfig.getRisk();
-        TradingConfig.Strategy strategy = tradingConfig.getStrategy();
-
-        if (req.maxPositionPct() != null)       risk.setMaxPositionPct(req.maxPositionPct());
-        if (req.maxConcurrentPositions() != null) risk.setMaxConcurrentPositions(req.maxConcurrentPositions());
-        if (req.maxDailyLossPct() != null)      risk.setMaxDailyLossPct(req.maxDailyLossPct());
-        if (req.maxConsecutiveLosses() != null)  risk.setMaxConsecutiveLosses(req.maxConsecutiveLosses());
-        if (req.takeProfitPct() != null)         risk.setTakeProfitPct(req.takeProfitPct());
-        if (req.stopLossPct() != null)           risk.setStopLossPct(req.stopLossPct());
-
-        if (req.emaShortPeriod() != null)  strategy.setEmaShortPeriod(req.emaShortPeriod());
-        if (req.emaLongPeriod() != null)   strategy.setEmaLongPeriod(req.emaLongPeriod());
-        if (req.rsiPeriod() != null)       strategy.setRsiPeriod(req.rsiPeriod());
-        if (req.rsiOverbought() != null)   strategy.setRsiOverbought(req.rsiOverbought());
-        if (req.rsiOversold() != null)     strategy.setRsiOversold(req.rsiOversold());
-
-        if (req.paperBalance() != null)    tradingConfig.setPaperBalance(req.paperBalance());
+        configService.UpdateConfigs(req);
 
         log.info("Config updated successfully");
         return ResponseEntity.ok("Config updated. Changes take effect on the next trading cycle.");
@@ -226,31 +187,7 @@ public class DashboardController {
     @GetMapping("/strategies")
     public ResponseEntity<List<Map<String, Object>>> strategies(
             @RequestParam(required = false) String pair) {
-        String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
-        List<StrategyType> registered = signalEngine.registeredStrategies();
-        BigDecimal fallbackBalance = tradingConfig.getPaperBalance();
-
-        List<Map<String, Object>> result = registered.stream()
-                .map(strategyType -> {
-                    Map<String, Map<StrategyType, BigDecimal>> allBalances = tradingConfig.getStrategyBalances();
-                    BigDecimal stratBalance = (allBalances != null && allBalances.containsKey(effectivePair)
-                            && allBalances.get(effectivePair).containsKey(strategyType))
-                            ? allBalances.get(effectivePair).get(strategyType)
-                            : fallbackBalance;
-                    RiskManager.RiskStatus risk = riskManager.currentStatusForStrategy(stratBalance, effectivePair, strategyType);
-                    Map<String, Object> entry = new LinkedHashMap<>();
-                    entry.put("pair", effectivePair);
-                    entry.put("name", strategyType.name());
-                    entry.put("displayName", strategyType.getDisplayName());
-                    entry.put("openPositions", risk.openPositions());
-                    entry.put("dailyPnl", risk.dailyPnl());
-                    entry.put("consecutiveLosses", risk.consecutiveLosses());
-                    entry.put("circuitBreakerActive", risk.anyCircuitBreakerTripped());
-                    return entry;
-                })
-                .toList();
-
-        return ResponseEntity.ok(result);
+        return ResponseEntity.ok(strategyService.getResult(pair));
     }
 
     /**
@@ -262,11 +199,7 @@ public class DashboardController {
     public ResponseEntity<List<PositionView>> strategyPositions(
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair) {
-        String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
-        BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(effectivePair);
-        List<Position> open = positionRepository
-                .findByStatusAndPairAndStrategyName(OrderStatus.OPEN, effectivePair, strategyType);
-        return ResponseEntity.ok(open.stream().map(p -> toPositionView(p, currentPrice)).toList());
+        return ResponseEntity.ok(strategyService.getPositionForStrategy(pair,strategyType));
     }
 
     /**
@@ -314,9 +247,8 @@ public class DashboardController {
             @PathVariable StrategyType strategyType,
             @RequestParam(defaultValue = "20") int limit,
             @RequestParam(required = false) String pair) {
-        String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
         return ResponseEntity.ok(
-                signalLogRepository.findRecentByPairAndStrategy(effectivePair, strategyType, limit));
+                signalService.getSignalStrategies(pair, strategyType, limit));
     }
 
     /**
@@ -327,44 +259,6 @@ public class DashboardController {
     @GetMapping("/signals/summary")
     public ResponseEntity<List<Map<String, Object>>> signalsSummary(
             @RequestParam(required = false) String pair) {
-        String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
-        List<Object[]> rows = signalLogRepository.countSignalsByStrategy(effectivePair);
-        List<Map<String, Object>> result = rows.stream()
-                .map(row -> {
-                    Map<String, Object> entry = new LinkedHashMap<>();
-                    entry.put("strategy", row[0]);
-                    entry.put("signalType", row[1]);
-                    entry.put("count", row[2]);
-                    return entry;
-                })
-                .toList();
-        return ResponseEntity.ok(result);
-    }
-
-    // ─── Private helpers ──────────────────────────────────────────────────────
-
-    private PositionView toPositionView(Position p, BigDecimal currentPrice) {
-        // Unrealised PnL = (currentPrice - entryPrice) × quantity
-        // For SELL (short): reversed
-        BigDecimal priceDiff = currentPrice.subtract(p.getEntryPrice());
-        if (p.getSide().name().equals("SELL")) {
-            priceDiff = priceDiff.negate();
-        }
-        BigDecimal unrealisedPnl = priceDiff.multiply(p.getQuantity()).setScale(2, RoundingMode.HALF_UP);
-
-        BigDecimal invested = p.getEntryPrice().multiply(p.getQuantity());
-        BigDecimal unrealisedPnlPct = invested.compareTo(BigDecimal.ZERO) == 0
-                ? BigDecimal.ZERO
-                : unrealisedPnl.divide(invested, 4, RoundingMode.HALF_UP)
-                        .multiply(BigDecimal.valueOf(100))
-                        .setScale(2, RoundingMode.HALF_UP);
-
-        return new PositionView(
-                p.getId(), p.getPair(), p.getSide().name(),
-                p.getEntryPrice(), p.getQuantity(),
-                p.getTakeProfit(), p.getStopLoss(),
-                currentPrice, unrealisedPnl, unrealisedPnlPct,
-                p.getSignalReason(), p.getOpenedAt()
-        );
+        return ResponseEntity.ok(signalService.getSummary(pair));
     }
 }

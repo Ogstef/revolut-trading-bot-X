@@ -1,8 +1,10 @@
-package com.stefo.revolut_trading_bot.strategy;
+package com.stefo.revolut_trading_bot.strategy.impl;
 
 import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.model.enums.SignalType;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.strategy.Signal;
+import com.stefo.revolut_trading_bot.strategy.TradingStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
