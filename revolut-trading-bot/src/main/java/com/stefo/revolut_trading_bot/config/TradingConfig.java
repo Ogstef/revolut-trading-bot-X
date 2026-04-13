@@ -26,6 +26,11 @@ public class TradingConfig {
     @NotEmpty
     private List<String> pairs = new ArrayList<>();
 
+    // Candle intervals in minutes (e.g. [15, 60] for 15m and 1h).
+    // The first entry is the "primary" interval used when ?interval= is omitted.
+    @NotEmpty
+    private List<Integer> intervals = new ArrayList<>(List.of(15));
+
     @NotNull
     private String mode;
 
@@ -60,6 +65,67 @@ public class TradingConfig {
      */
     public String primaryPair() {
         return pairs.isEmpty() ? "BTC-EUR" : pairs.get(0);
+    }
+
+    /**
+     * The label of the first configured interval (e.g. "15m").
+     * Used as default when ?interval= query param is omitted.
+     */
+    public String primaryInterval() {
+        return intervals.isEmpty() ? "15m" : intervalLabel(intervals.get(0));
+    }
+
+    /**
+     * Returns all configured interval labels (e.g. ["15m", "1h"]).
+     */
+    public List<String> intervalLabels() {
+        return intervals.stream().map(TradingConfig::intervalLabel).toList();
+    }
+
+    /**
+     * Converts interval minutes to a human-readable label.
+     * 15 -> "15m", 60 -> "1h", 240 -> "4h", 1440 -> "1d"
+     */
+    public static String intervalLabel(int minutes) {
+        if (minutes >= 1440 && minutes % 1440 == 0) {
+            return (minutes / 1440) + "d";
+        }
+        if (minutes >= 60 && minutes % 60 == 0) {
+            return (minutes / 60) + "h";
+        }
+        return minutes + "m";
+    }
+
+    /**
+     * Converts an interval label back to minutes.
+     * "15m" -> 15, "1h" -> 60, "4h" -> 240, "1d" -> 1440
+     */
+    public static int intervalMinutes(String label) {
+        if (label.endsWith("d")) {
+            return Integer.parseInt(label.substring(0, label.length() - 1)) * 1440;
+        }
+        if (label.endsWith("h")) {
+            return Integer.parseInt(label.substring(0, label.length() - 1)) * 60;
+        }
+        if (label.endsWith("m")) {
+            return Integer.parseInt(label.substring(0, label.length() - 1));
+        }
+        return Integer.parseInt(label);
+    }
+
+    /**
+     * Returns a display-friendly interval name (e.g. "15 min", "1 hour", "4 hours", "1 day").
+     */
+    public static String intervalDisplayName(int minutes) {
+        if (minutes >= 1440 && minutes % 1440 == 0) {
+            int days = minutes / 1440;
+            return days + (days == 1 ? " day" : " days");
+        }
+        if (minutes >= 60 && minutes % 60 == 0) {
+            int hours = minutes / 60;
+            return hours + (hours == 1 ? " hour" : " hours");
+        }
+        return minutes + " min";
     }
 
     @Data

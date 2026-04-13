@@ -42,36 +42,39 @@ public class OrderExecutionService {
     private final TradingConfig           config;
 
     /**
-     * Processes a signal using (pair, strategy)-scoped risk validation.
+     * Processes a signal using (pair, interval, strategy)-scoped risk validation.
      *  - BUY  → validates risk, opens position if approved
-     *  - SELL → closes all open positions for this (pair, strategy)
+     *  - SELL → closes all open positions for this (pair, interval, strategy)
      *  - HOLD → no action
      *
-     * @param signal           evaluated signal (carries pair and strategyType)
+     * @param signal           evaluated signal (carries pair, interval, and strategyType)
      * @param availableBalance EUR balance allocated to this (pair, strategy)
      * @param currentPrice     current market price for this pair
      */
     @Transactional
     public Optional<Position> executeSignal(Signal signal, BigDecimal availableBalance,
                                             BigDecimal currentPrice) {
-        String pair          = signal.pair();
+        String pair           = signal.pair();
+        String interval       = signal.interval();
         StrategyType strategy = signal.strategyType();
-        log.info("ExecuteSignal: {} pair={} strategy={} price={}", signal.type(), pair, strategy, currentPrice);
+        log.info("ExecuteSignal: {} pair={} interval={} strategy={} price={}",
+                signal.type(), pair, interval, strategy, currentPrice);
 
         if (signal.type() == SignalType.HOLD) {
-            log.debug("Signal is HOLD — no action [pair={} strategy={}]", pair, strategy);
+            log.debug("Signal is HOLD — no action [pair={} interval={} strategy={}]", pair, interval, strategy);
             return Optional.empty();
         }
 
         if (signal.type() == SignalType.SELL) {
-            closePositions(pair, strategy, currentPrice, TakeProfitStopLossManager.EXIT_SIGNAL);
+            closePositions(pair, interval, strategy, currentPrice, TakeProfitStopLossManager.EXIT_SIGNAL);
             return Optional.empty();
         }
 
-        // BUY — run (pair, strategy)-scoped risk checks
-        RiskValidationResult risk = riskManager.validateForStrategy(availableBalance, pair, strategy);
+        // BUY — run (pair, interval, strategy)-scoped risk checks
+        RiskValidationResult risk = riskManager.validateForStrategy(availableBalance, pair, interval, strategy);
         if (!risk.approved()) {
-            log.info("Trade blocked by risk manager [pair={} strategy={}]: {}", pair, strategy, risk.reason());
+            log.info("Trade blocked by risk manager [pair={} interval={} strategy={}]: {}",
+                    pair, interval, strategy, risk.reason());
             return Optional.empty();
         }
 
@@ -80,11 +83,17 @@ public class OrderExecutionService {
     }
 
     /**
-     * Scans open positions for the given (pair, strategy) and closes any that hit TP/SL.
-     *
-     * @param currentPrice current market price for this pair
-     * @param pair         only positions for this pair are checked
-     * @param strategyName only positions tagged with this strategy are checked
+     * Scans open positions for the given (pair, interval, strategy) and closes any that hit TP/SL.
+     */
+    @Transactional
+    public void monitorPositions(BigDecimal currentPrice, String pair, String interval, StrategyType strategyName) {
+        List<Position> open = positionRepository
+                .findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, pair, interval, strategyName);
+        checkAndClosePositions(open, currentPrice);
+    }
+
+    /**
+     * Backward-compatible (pair, strategy) scoped monitor — uses all intervals.
      */
     @Transactional
     public void monitorPositions(BigDecimal currentPrice, String pair, StrategyType strategyName) {
@@ -117,16 +126,17 @@ public class OrderExecutionService {
         }
     }
 
-    private void closePositions(String pair, StrategyType strategyName,
+    private void closePositions(String pair, String interval, StrategyType strategyName,
                                 BigDecimal currentPrice, String exitReason) {
         List<Position> open = positionRepository
-                .findByStatusAndPairAndStrategyName(OrderStatus.OPEN, pair, strategyName);
+                .findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, pair, interval, strategyName);
         if (open.isEmpty()) {
-            log.debug("SELL signal — no open positions to close [pair={} strategy={}]", pair, strategyName);
+            log.debug("SELL signal — no open positions to close [pair={} interval={} strategy={}]",
+                    pair, interval, strategyName);
             return;
         }
-        log.info("SELL signal — closing {} open position(s) [pair={} strategy={}]",
-                open.size(), pair, strategyName);
+        log.info("SELL signal — closing {} open position(s) [pair={} interval={} strategy={}]",
+                open.size(), pair, interval, strategyName);
         open.forEach(p -> paperTradingService.closePosition(p, currentPrice, exitReason));
     }
 }

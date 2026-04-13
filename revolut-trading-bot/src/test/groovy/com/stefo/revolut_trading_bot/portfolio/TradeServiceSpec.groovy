@@ -127,7 +127,7 @@ class TradeServiceSpec extends Specification {
 
     def "getStatsForStrategy returns empty stats when no trades for strategy"() {
         given:
-        tradeRepository.findByStrategyNameOrderByExecutedAtDesc(StrategyType.MACD) >> []
+        tradeRepository.findByPairAndIntervalAndStrategyNameOrderByExecutedAtDesc("BTC-EUR", "15m", StrategyType.MACD) >> []
 
         when:
         def stats = service.getStatsForStrategy(StrategyType.MACD)
@@ -138,7 +138,7 @@ class TradeServiceSpec extends Specification {
 
     def "getStatsForStrategy aggregates only the requested strategy's trades"() {
         given:
-        tradeRepository.findByStrategyNameOrderByExecutedAtDesc(StrategyType.EMA_CROSSOVER) >> [
+        tradeRepository.findByPairAndIntervalAndStrategyNameOrderByExecutedAtDesc("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER) >> [
             trade(BigDecimal.valueOf(100)),
             trade(BigDecimal.valueOf(-30))
         ]
@@ -176,7 +176,7 @@ class TradeServiceSpec extends Specification {
 
     def "getPnlBreakdownForStrategy returns strategy-scoped PnL periods"() {
         given:
-        tradeRepository.sumPnlSinceAndStrategyName(_ as LocalDateTime, StrategyType.BOLLINGER) >>> [
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", "15m", StrategyType.BOLLINGER) >>> [
             BigDecimal.valueOf(10),
             BigDecimal.valueOf(40),
             BigDecimal.valueOf(150),

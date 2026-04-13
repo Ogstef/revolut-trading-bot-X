@@ -72,7 +72,7 @@ public class MfiStrategy implements TradingStrategy {
             String reason = String.format("MFI recovered from oversold — mfi=%.1f (was %.1f, crossed %.0f)",
                     mfiNow, mfiPrev, OVERSOLD);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(75), reason,
-                    pair, StrategyType.MFI, now, null, null, mfiVal,
+                    pair, null, StrategyType.MFI, now, null, null, mfiVal,
                     bd(series.getBar(lastIdx).getClosePrice().doubleValue()));
         }
 
@@ -80,7 +80,7 @@ public class MfiStrategy implements TradingStrategy {
             String reason = String.format("MFI entered overbought — mfi=%.1f (was %.1f, crossed %.0f)",
                     mfiNow, mfiPrev, OVERBOUGHT);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(71), reason,
-                    pair, StrategyType.MFI, now, null, null, mfiVal,
+                    pair, null, StrategyType.MFI, now, null, null, mfiVal,
                     bd(series.getBar(lastIdx).getClosePrice().doubleValue()));
         }
 
@@ -91,7 +91,7 @@ public class MfiStrategy implements TradingStrategy {
 
     private Signal hold(String reason, String pair, Instant evaluatedAt, BigDecimal mfiVal) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.MFI, evaluatedAt, null, null, mfiVal, null);
+                pair, null, StrategyType.MFI, evaluatedAt, null, null, mfiVal, null);
     }
 
     private BigDecimal bd(double value) {

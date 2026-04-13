@@ -23,6 +23,10 @@ public class SignalLog {
     @Column(nullable = false, length = 20)
     private String pair;
 
+    @Column(name = "interval", nullable = false, length = 10)
+    @Builder.Default
+    private String interval = "15m";
+
     @Enumerated(EnumType.STRING)
     @Column(name = "signal_type", nullable = false, length = 10)
     private SignalType signalType;

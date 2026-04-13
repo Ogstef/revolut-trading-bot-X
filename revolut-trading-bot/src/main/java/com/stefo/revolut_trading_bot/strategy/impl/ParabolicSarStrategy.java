@@ -84,7 +84,7 @@ public class ParabolicSarStrategy implements TradingStrategy {
             String reason = String.format("Price flipped above SAR — price=%.2f sar=%.2f gap=%.2f%%",
                     priceNow, sarNow, distance.doubleValue());
             return new Signal(SignalType.BUY, BigDecimal.valueOf(75), reason,
-                    pair, StrategyType.PARABOLIC_SAR, now, sarVal, null, distance, priceVal);
+                    pair, null, StrategyType.PARABOLIC_SAR, now, sarVal, null, distance, priceVal);
         }
 
         // SELL flip: was above or at SAR, now below SAR
@@ -92,7 +92,7 @@ public class ParabolicSarStrategy implements TradingStrategy {
             String reason = String.format("Price flipped below SAR — price=%.2f sar=%.2f gap=%.2f%%",
                     priceNow, sarNow, distance.doubleValue());
             return new Signal(SignalType.SELL, BigDecimal.valueOf(71), reason,
-                    pair, StrategyType.PARABOLIC_SAR, now, sarVal, null, distance, priceVal);
+                    pair, null, StrategyType.PARABOLIC_SAR, now, sarVal, null, distance, priceVal);
         }
 
         String side   = priceNow > sarNow ? "above" : "below";
@@ -104,7 +104,7 @@ public class ParabolicSarStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal sar, BigDecimal distance, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.PARABOLIC_SAR, evaluatedAt, sar, null, distance, price);
+                pair, null, StrategyType.PARABOLIC_SAR, evaluatedAt, sar, null, distance, price);
     }
 
     private BigDecimal bd(double value) {

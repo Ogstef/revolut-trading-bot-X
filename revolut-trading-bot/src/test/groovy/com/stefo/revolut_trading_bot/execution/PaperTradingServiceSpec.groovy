@@ -208,13 +208,13 @@ class PaperTradingServiceSpec extends Specification {
 
     private static Signal buySignal(String pair, StrategyType strategyType) {
         new Signal(SignalType.BUY, BigDecimal.valueOf(75), "BUY signal",
-                pair, strategyType, Instant.now(),
+                pair, null, strategyType, Instant.now(),
                 null, null, null, BigDecimal.valueOf(50_000))
     }
 
     private static Signal sellSignal(String pair, StrategyType strategyType) {
         new Signal(SignalType.SELL, BigDecimal.valueOf(70), "SELL signal",
-                pair, strategyType, Instant.now(),
+                pair, null, strategyType, Instant.now(),
                 null, null, null, BigDecimal.valueOf(50_000))
     }
 

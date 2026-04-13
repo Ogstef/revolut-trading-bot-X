@@ -105,7 +105,7 @@ public class BollingerBandsStrategy implements TradingStrategy {
             String reason = String.format("Price crossed above lower band — price=%.2f lower=%.2f %%B=%.1f",
                     priceNow, lowerNow, percentB.doubleValue());
             return new Signal(SignalType.BUY, BigDecimal.valueOf(70), reason,
-                    pair, StrategyType.BOLLINGER, now, upper, lower, percentB, price);
+                    pair, null, StrategyType.BOLLINGER, now, upper, lower, percentB, price);
         }
 
         // Breakout above upper band: was at-or-below, now above → sell (overbought)
@@ -113,7 +113,7 @@ public class BollingerBandsStrategy implements TradingStrategy {
             String reason = String.format("Price crossed above upper band — price=%.2f upper=%.2f %%B=%.1f",
                     priceNow, upperNow, percentB.doubleValue());
             return new Signal(SignalType.SELL, BigDecimal.valueOf(65), reason,
-                    pair, StrategyType.BOLLINGER, now, upper, lower, percentB, price);
+                    pair, null, StrategyType.BOLLINGER, now, upper, lower, percentB, price);
         }
 
         String reason = String.format("Price inside bands — price=%.2f upper=%.2f lower=%.2f %%B=%.1f",
@@ -124,7 +124,7 @@ public class BollingerBandsStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal upper, BigDecimal lower, BigDecimal percentB, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.BOLLINGER, evaluatedAt, upper, lower, percentB, price);
+                pair, null, StrategyType.BOLLINGER, evaluatedAt, upper, lower, percentB, price);
     }
 
     private BigDecimal bd(double value) {

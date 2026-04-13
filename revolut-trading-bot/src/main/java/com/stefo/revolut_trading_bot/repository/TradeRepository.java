@@ -61,4 +61,27 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
                                                   @Param("limit") int limit);
 
     List<Trade> findByStrategyNameOrderByExecutedAtDesc(StrategyType strategyName);
+
+    // ─── Pair + interval + strategy scoped queries (Phase 11 — multi-interval) ──
+
+    @Query("SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t WHERE t.executedAt >= :since AND t.pair = :pair AND t.interval = :interval AND t.strategyName = :strategyName")
+    BigDecimal sumPnlSinceAndPairAndIntervalAndStrategy(@Param("since") LocalDateTime since,
+                                                         @Param("pair") String pair,
+                                                         @Param("interval") String interval,
+                                                         @Param("strategyName") StrategyType strategyName);
+
+    @Query("""
+            SELECT t FROM Trade t WHERE t.pair = :pair AND t.interval = :interval AND t.strategyName = :strategyName
+            ORDER BY t.executedAt DESC
+            LIMIT :limit
+            """)
+    List<Trade> findRecentTradesByPairAndIntervalAndStrategy(@Param("pair") String pair,
+                                                              @Param("interval") String interval,
+                                                              @Param("strategyName") StrategyType strategyName,
+                                                              @Param("limit") int limit);
+
+    List<Trade> findByPairAndIntervalAndStrategyNameOrderByExecutedAtDesc(
+            String pair, String interval, StrategyType strategyName);
+
+    List<Trade> findByPairAndIntervalOrderByExecutedAtDesc(String pair, String interval);
 }

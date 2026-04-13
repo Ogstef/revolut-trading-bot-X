@@ -98,7 +98,7 @@ public class IchimokuStrategy implements TradingStrategy {
                     "Ichimoku BUY — TK cross bullish, close=%.2f above cloud [%.2f,%.2f], green cloud",
                     closeNow, cloudBottom, cloudTop);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(82), reason,
-                    pair, StrategyType.ICHIMOKU, now, tenkanVal, kijunVal, spanAVal, priceVal);
+                    pair, null, StrategyType.ICHIMOKU, now, tenkanVal, kijunVal, spanAVal, priceVal);
         }
 
         // SELL: TK bearish cross + price below cloud + red cloud
@@ -109,7 +109,7 @@ public class IchimokuStrategy implements TradingStrategy {
                     "Ichimoku SELL — TK cross bearish, close=%.2f below cloud [%.2f,%.2f], red cloud",
                     closeNow, cloudBottom, cloudTop);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(78), reason,
-                    pair, StrategyType.ICHIMOKU, now, tenkanVal, kijunVal, spanAVal, priceVal);
+                    pair, null, StrategyType.ICHIMOKU, now, tenkanVal, kijunVal, spanAVal, priceVal);
         }
 
         String fog = closeNow >= cloudBottom && closeNow <= cloudTop ? " (price inside cloud)" : "";
@@ -122,7 +122,7 @@ public class IchimokuStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal tenkan, BigDecimal kijun, BigDecimal spanA, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.ICHIMOKU, evaluatedAt, tenkan, kijun, spanA, price);
+                pair, null, StrategyType.ICHIMOKU, evaluatedAt, tenkan, kijun, spanA, price);
     }
 
     private BigDecimal bd(double value) {

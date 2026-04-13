@@ -48,7 +48,7 @@ class OrderExecutionServiceSpec extends Specification {
         given:
         def signal = signal(SignalType.SELL, "BTC-EUR", StrategyType.EMA_CROSSOVER)
         def openPositions = [openPosition()]
-        positionRepository.findByStatusAndPairAndStrategyName(OrderStatus.OPEN, "BTC-EUR", StrategyType.EMA_CROSSOVER) >> openPositions
+        positionRepository.findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> openPositions
 
         when:
         def result = service.executeSignal(signal, BigDecimal.valueOf(10_000), BigDecimal.valueOf(50_000))
@@ -61,7 +61,7 @@ class OrderExecutionServiceSpec extends Specification {
     def "SELL signal: no positions to close — no exception"() {
         given:
         def signal = signal(SignalType.SELL, "BTC-EUR", StrategyType.EMA_CROSSOVER)
-        positionRepository.findByStatusAndPairAndStrategyName(OrderStatus.OPEN, "BTC-EUR", StrategyType.EMA_CROSSOVER) >> []
+        positionRepository.findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> []
 
         when:
         def result = service.executeSignal(signal, BigDecimal.valueOf(10_000), BigDecimal.valueOf(50_000))
@@ -75,7 +75,7 @@ class OrderExecutionServiceSpec extends Specification {
         given:
         def signal = signal(SignalType.BUY, "BTC-EUR", StrategyType.EMA_CROSSOVER)
         def expectedPosition = openPosition()
-        riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER) >>
+        riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >>
                 RiskValidationResult.approved(BigDecimal.valueOf(200))
         paperTradingService.openPosition(signal, BigDecimal.valueOf(200), BigDecimal.valueOf(50_000)) >> expectedPosition
 
@@ -90,7 +90,7 @@ class OrderExecutionServiceSpec extends Specification {
     def "BUY signal: returns empty when risk rejected"() {
         given:
         def signal = signal(SignalType.BUY, "BTC-EUR", StrategyType.EMA_CROSSOVER)
-        riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER) >>
+        riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >>
                 RiskValidationResult.rejected("Max positions reached")
 
         when:
@@ -158,7 +158,7 @@ class OrderExecutionServiceSpec extends Specification {
 
     private static Signal signal(SignalType type, String pair, StrategyType strategyType) {
         new Signal(type, BigDecimal.valueOf(75), "test signal",
-                pair, strategyType, Instant.now(),
+                pair, null, strategyType, Instant.now(),
                 null, null, null, BigDecimal.valueOf(50_000))
     }
 

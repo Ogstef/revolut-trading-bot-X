@@ -18,4 +18,6 @@ public interface CandlestickRepository extends JpaRepository<Candlestick, Long> 
 
     Optional<Candlestick> findByPairAndIntervalAndTimestamp(
             String pair, String interval, LocalDateTime timestamp);
+
+    Optional<Candlestick> findTopByPairAndIntervalOrderByTimestampDesc(String pair, String interval);
 }

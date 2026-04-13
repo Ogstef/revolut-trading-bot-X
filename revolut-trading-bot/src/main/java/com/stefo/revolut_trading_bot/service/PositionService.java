@@ -32,6 +32,10 @@ public class PositionService {
         return repository.findByStatusAndPairAndStrategyName(OrderStatus.OPEN, effectivePair, strategyType);
     }
 
+    public List<Position> getOpenPositions(String effectivePair, String interval, StrategyType strategyType) {
+        return repository.findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, effectivePair, interval, strategyType);
+    }
+
     private List<PositionView> getViews(List<Position> positions) {
         return positions.stream()
                 .map(p -> {

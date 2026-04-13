@@ -32,4 +32,14 @@ public interface PositionRepository extends JpaRepository<Position, Long> {
     List<Position> findByStatusAndPairAndStrategyName(OrderStatus status, String pair, StrategyType strategyName);
 
     long countByStatusAndPairAndStrategyName(OrderStatus status, String pair, StrategyType strategyName);
+
+    // ─── Pair + interval + strategy scoped queries (Phase 11 — multi-interval) ──
+
+    List<Position> findByStatusAndPairAndIntervalAndStrategyName(
+            OrderStatus status, String pair, String interval, StrategyType strategyName);
+
+    long countByStatusAndPairAndIntervalAndStrategyName(
+            OrderStatus status, String pair, String interval, StrategyType strategyName);
+
+    List<Position> findByPairAndIntervalAndStatus(String pair, String interval, OrderStatus status);
 }

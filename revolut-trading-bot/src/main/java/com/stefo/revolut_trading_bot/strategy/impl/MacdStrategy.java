@@ -89,7 +89,7 @@ public class MacdStrategy implements TradingStrategy {
             String reason = String.format("MACD histogram crossed above zero — hist=%.6f macd=%.2f signal=%.2f",
                     histNow.doubleValue(), macdNow.doubleValue(), signalNow.doubleValue());
             return new Signal(SignalType.BUY, BigDecimal.valueOf(72), reason,
-                    pair, StrategyType.MACD, now, macdNow, signalNow, histNow, priceNow);
+                    pair, null, StrategyType.MACD, now, macdNow, signalNow, histNow, priceNow);
         }
 
         // Bearish crossover: histogram was ≥ 0, now < 0
@@ -97,7 +97,7 @@ public class MacdStrategy implements TradingStrategy {
             String reason = String.format("MACD histogram crossed below zero — hist=%.6f macd=%.2f signal=%.2f",
                     histNow.doubleValue(), macdNow.doubleValue(), signalNow.doubleValue());
             return new Signal(SignalType.SELL, BigDecimal.valueOf(68), reason,
-                    pair, StrategyType.MACD, now, macdNow, signalNow, histNow, priceNow);
+                    pair, null, StrategyType.MACD, now, macdNow, signalNow, histNow, priceNow);
         }
 
         String reason = String.format("MACD no crossover — hist=%.6f (side=%s)",
@@ -109,7 +109,7 @@ public class MacdStrategy implements TradingStrategy {
                         BigDecimal macdLine, BigDecimal signalLine, BigDecimal histogram,
                         BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.MACD, evaluatedAt, macdLine, signalLine, histogram, price);
+                pair, null, StrategyType.MACD, evaluatedAt, macdLine, signalLine, histogram, price);
     }
 
     private BigDecimal bd(double value) {

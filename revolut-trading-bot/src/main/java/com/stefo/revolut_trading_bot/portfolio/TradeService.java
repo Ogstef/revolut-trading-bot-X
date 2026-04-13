@@ -107,9 +107,21 @@ public class TradeService {
 
     /**
      * Strategy-scoped statistics — same logic as getStats() but filtered to one strategy.
+     * Backward-compatible: uses primary pair and primary interval.
      */
     public TradingStats getStatsForStrategy(StrategyType strategyName) {
-        List<Trade> closed = tradeRepository.findByStrategyNameOrderByExecutedAtDesc(strategyName)
+        return getStatsForStrategy(null, null, strategyName);
+    }
+
+    /**
+     * Strategy-scoped statistics filtered to a specific (pair, interval, strategy).
+     */
+    public TradingStats getStatsForStrategy(String pair, String interval, StrategyType strategyName) {
+        String effectivePair     = pair != null ? pair : config.primaryPair();
+        String effectiveInterval = interval != null ? interval : config.primaryInterval();
+
+        List<Trade> closed = tradeRepository
+                .findByPairAndIntervalAndStrategyNameOrderByExecutedAtDesc(effectivePair, effectiveInterval, strategyName)
                 .stream()
                 .filter(t -> t.getPnl() != null)
                 .toList();
@@ -150,18 +162,28 @@ public class TradeService {
     }
 
     /**
-     * Strategy-scoped PnL breakdown.
+     * Strategy-scoped PnL breakdown — backward-compatible.
      */
     public PnlBreakdown getPnlBreakdownForStrategy(StrategyType strategyName) {
+        return getPnlBreakdownForStrategy(null, null, strategyName);
+    }
+
+    /**
+     * Strategy-scoped PnL breakdown filtered to a specific (pair, interval, strategy).
+     */
+    public PnlBreakdown getPnlBreakdownForStrategy(String pair, String interval, StrategyType strategyName) {
+        String effectivePair     = pair != null ? pair : config.primaryPair();
+        String effectiveInterval = interval != null ? interval : config.primaryInterval();
+
         LocalDateTime startOfDay   = LocalDate.now().atStartOfDay();
         LocalDateTime startOfWeek  = LocalDate.now().with(java.time.DayOfWeek.MONDAY).atStartOfDay();
         LocalDateTime startOfMonth = LocalDate.now().withDayOfMonth(1).atStartOfDay();
         LocalDateTime epoch        = LocalDateTime.of(2000, 1, 1, 0, 0);
 
-        BigDecimal daily   = tradeRepository.sumPnlSinceAndStrategyName(startOfDay,   strategyName);
-        BigDecimal weekly  = tradeRepository.sumPnlSinceAndStrategyName(startOfWeek,  strategyName);
-        BigDecimal monthly = tradeRepository.sumPnlSinceAndStrategyName(startOfMonth, strategyName);
-        BigDecimal allTime = tradeRepository.sumPnlSinceAndStrategyName(epoch,        strategyName);
+        BigDecimal daily   = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
+        BigDecimal weekly  = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
+        BigDecimal monthly = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
+        BigDecimal allTime = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
 
         return new PnlBreakdown(
                 daily.setScale(2, RoundingMode.HALF_UP),

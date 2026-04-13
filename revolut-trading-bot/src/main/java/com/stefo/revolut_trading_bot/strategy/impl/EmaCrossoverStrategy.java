@@ -88,7 +88,7 @@ public class EmaCrossoverStrategy implements TradingStrategy {
                     "EMA%d crossed above EMA%d — RSI=%.1f (neutral) — price above EMA%d",
                     shortPeriod, longPeriod, rsiNow.doubleValue(), longPeriod);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(75), reason,
-                    pair, StrategyType.EMA_CROSSOVER, now, ema9Now, ema21Now, rsiNow, priceNow);
+                    pair, null, StrategyType.EMA_CROSSOVER, now, ema9Now, ema21Now, rsiNow, priceNow);
         }
 
         if (bearishCross || rsiIsOver) {
@@ -98,7 +98,7 @@ public class EmaCrossoverStrategy implements TradingStrategy {
                     : String.format("RSI=%.1f exceeded overbought threshold of %d",
                             rsiNow.doubleValue(), overbought);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(70), reason,
-                    pair, StrategyType.EMA_CROSSOVER, now, ema9Now, ema21Now, rsiNow, priceNow);
+                    pair, null, StrategyType.EMA_CROSSOVER, now, ema9Now, ema21Now, rsiNow, priceNow);
         }
 
         String reason = String.format("No crossover — EMA%d=%.2f EMA%d=%.2f RSI=%.1f",
@@ -109,7 +109,7 @@ public class EmaCrossoverStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal ema9, BigDecimal ema21, BigDecimal rsi, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.EMA_CROSSOVER, evaluatedAt, ema9, ema21, rsi, price);
+                pair, null, StrategyType.EMA_CROSSOVER, evaluatedAt, ema9, ema21, rsi, price);
     }
 
     private BigDecimal bd(double value) {

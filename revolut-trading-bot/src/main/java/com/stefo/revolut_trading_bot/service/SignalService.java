@@ -34,8 +34,29 @@ public class SignalService {
                 .toList();
     }
 
+    public List<Map<String, Object>> getSummary (String pair, String interval) {
+        String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
+        String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
+        List<Object[]> rows = repository.countSignalsByStrategyAndInterval(effectivePair, effectiveInterval);
+        return rows.stream()
+                .map(row -> {
+                    Map<String, Object> entry = new LinkedHashMap<>();
+                    entry.put("strategy", row[0]);
+                    entry.put("signalType", row[1]);
+                    entry.put("count", row[2]);
+                    return entry;
+                })
+                .toList();
+    }
+
     public List<SignalLog> getSignalStrategies (String pair, StrategyType strategyType, int limit) {
         String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
         return repository.findRecentByPairAndStrategy(effectivePair, strategyType, limit);
+    }
+
+    public List<SignalLog> getSignalStrategies (String pair, String interval, StrategyType strategyType, int limit) {
+        String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
+        String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
+        return repository.findRecentByPairAndIntervalAndStrategy(effectivePair, effectiveInterval, strategyType, limit);
     }
 }

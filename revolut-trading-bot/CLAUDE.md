@@ -1,8 +1,13 @@
 # Revolut X Trading Bot — Project Blueprint
 
+> **See also:** Root [`/CLAUDE.md`](../CLAUDE.md) for project-wide context (execution unit, how to run, API overview).
+> Frontend-specific instructions are in [`revolut-trading-bot-ui/CLAUDE.md`](../revolut-trading-bot-ui/CLAUDE.md).
+
 ## Overview
 
 Automated cryptocurrency trading bot in Java/Spring Boot that uses the Revolut X REST API. Starts in PAPER mode (simulated trades), validates the strategy, then optionally switches to LIVE mode with real money.
+
+The fundamental execution unit is `(pair, strategy, interval)` — each combination is a fully isolated virtual portfolio with independent positions, trades, circuit breakers, and P&L tracking.
 
 ## Tech Stack
 
@@ -122,22 +127,30 @@ com.stefo.revolut_trading_bot/
 PostgreSQL, schema: `trading`. All monetary fields: `DECIMAL(18,8)`. Managed by Flyway.
 
 **Tables:**
-1. **positions** — id, pair, side, entry_price, quantity, take_profit, stop_loss, status (OPEN/CLOSED), opened_at, closed_at, signal_reason, created_at, updated_at
-2. **trades** — id, position_id (FK), pair, side, entry_price, exit_price, quantity, pnl, pnl_pct, exit_reason (TP_HIT/SL_HIT/SIGNAL_EXIT/MANUAL), executed_at, trading_mode (PAPER/LIVE)
+1. **positions** — id, pair, **interval**, side, entry_price, quantity, take_profit, stop_loss, status (OPEN/CLOSED), strategy_name, opened_at, closed_at, signal_reason
+2. **trades** — id, position_id (FK), pair, **interval**, side, entry_price, exit_price, quantity, pnl, pnl_pct, strategy_name, exit_reason (TP_HIT/SL_HIT/SIGNAL_EXIT/MANUAL), executed_at, closed_at, trading_mode (PAPER/LIVE)
 3. **candlesticks** — id, pair, interval, open/high/low/close_price, volume, timestamp. Unique constraint on (pair, interval, timestamp)
-4. **signal_logs** — id, pair, signal_type, confidence, reason, ema_short, ema_long, rsi, current_price, created_at
+4. **signal_logs** — id, pair, **interval**, strategy_name, signal_type, confidence, reason, ema_short, ema_long, rsi, current_price, created_at
+
+All queries on positions, trades, and signal_logs filter by the triple `(pair, interval, strategy_name)`. The `interval` column stores labels like `"15m"`, `"1h"`, `"4h"`.
 
 ### Trading Configuration (application.yml)
 
 ```yaml
 trading:
+  pairs: [BTC-EUR, ETH-EUR, SOL-EUR]
+  intervals: [15, 60]                  # candle intervals in minutes (15m, 1h)
   mode: PAPER
-  pair: BTC-EUR
-  poll-interval-seconds: 30
-  candlestick-interval: 15m
+  polling-interval-seconds: 30
+  paper-balance: 10000.00
+  primary-strategy: EMA_CROSSOVER
+  strategy-balances:                   # nested: pair -> strategy -> EUR balance
+    BTC-EUR:
+      EMA_CROSSOVER: 10000.00
+      # ... (12 strategies per pair)
   strategy:
-    short-ema-period: 9
-    long-ema-period: 21
+    ema-short-period: 9
+    ema-long-period: 21
     rsi-period: 14
     rsi-overbought: 70
     rsi-oversold: 30
@@ -145,10 +158,14 @@ trading:
     take-profit-pct: 5.0
     stop-loss-pct: 3.0
     max-position-pct: 2.0
-    max-concurrent-positions: 3
+    max-concurrent-positions: 1
     max-daily-loss-pct: 5.0
-    consecutive-loss-limit: 5
+    max-consecutive-losses: 5
 ```
+
+**Interval mapping:** `15` -> `"15m"`, `60` -> `"1h"`, `240` -> `"4h"`, `1440` -> `"1d"`. Helper: `TradingConfig.intervalLabel(int minutes)`.
+
+**Balance sharing:** Balances are keyed by `(pair, strategy)` and shared across intervals. A position on `(BTC-EUR, EMA_CROSSOVER, 15m)` and one on `(BTC-EUR, EMA_CROSSOVER, 1h)` draw from the same virtual balance. Positions, trades, risk checks, and P&L are fully isolated per interval.
 
 ---
 
@@ -176,13 +193,17 @@ Using Ta4j library with configurable parameters.
 - Stop Loss: entry_price × 0.97 (3%)
 
 ### Trading Loop (every 30s via @Scheduled)
-1. `MarketDataService.fetchLatestCandles("BTC-EUR", "15m")`
-2. Build/update Ta4j `BarSeries`
-3. `SignalEngine.evaluate("BTC-EUR")` → BUY/SELL/HOLD
-4. If BUY/SELL → `RiskManager.validateTrade(signal)` → position sizing → execute
-5. Monitor all open positions: check current price against TP/SL
-6. Close positions that hit TP/SL, record trades
-7. Log everything via `AlertService`
+1. `SignalEngine.evaluateAllPairsAndPersist()` — triple loop: **pairs x intervals x strategies**
+   - For each pair, for each interval: fetch candles once via `MarketDataService.fetchBarSeriesForPairAndInterval(pair, intervalLabel)`
+   - For each strategy: evaluate on the BarSeries, inject interval via `signal.withInterval(intervalLabel)`
+2. Group signals by `(pair, interval)`
+3. For each group: get current price, then for each strategy signal:
+   - Monitor TP/SL for open positions (scoped to pair + interval + strategy)
+   - Check risk manager constraints (scoped to pair + interval + strategy)
+   - Execute signal (BUY/SELL/HOLD)
+4. Log everything via `AlertService`
+
+Total signals per cycle: `N_pairs x N_intervals x N_strategies` (e.g. 3 x 2 x 12 = 72)
 
 ---
 
@@ -734,3 +755,43 @@ Verify with `GET /api/strategies` — all 12 strategy names should appear after 
 ### Milestone
 
 12 strategies across 3 pairs = 36 independent virtual portfolios. Volume (MFI), breakout (Donchian), and multi-condition trend (Ichimoku) now cover the signal categories missing from the original 9. After several more weeks of paper data, compare expectancy across all 12 to identify the strongest candidates for live trading.
+
+---
+
+### Phase 11 — Multi-Interval Support
+
+**Goal:** Run all 12 strategies on multiple candle intervals simultaneously (15m, 1h, and potentially more). The execution unit changes from `(pair, strategy)` to `(pair, strategy, interval)`. Each triple is a fully isolated virtual portfolio. This enables direct performance comparison of the same strategy across different timeframes.
+
+**Key design decisions:**
+- Strategies are **interval-agnostic** — they receive a `BarSeries` and don't know which interval produced it. The `SignalEngine` injects the interval via `Signal.withInterval()` after evaluation. Zero changes to the 12 strategy implementation files.
+- Balances are **shared** per `(pair, strategy)` across intervals. Positions, trades, risk, and PnL are **isolated** per `(pair, strategy, interval)`.
+- The 30-second polling loop fetches candles for ALL intervals every cycle. For 1h candles, the API mostly returns the same still-forming candle — strategies evaluate HOLD. TP/SL monitoring still runs every 30s regardless of interval.
+
+**What was changed:**
+
+1. **Database migration V5** — added `interval VARCHAR(10) NOT NULL DEFAULT '15m'` to `positions`, `trades`, `signal_logs` with composite indexes
+2. **TradingConfig** — added `intervals: [15, 60]` list, `primaryInterval()`, `intervalLabel(int)` helpers
+3. **Signal record** — added `String interval` field + `withInterval()` copy method
+4. **Position, Trade, SignalLog entities** — added `interval` column
+5. **All repositories** — added interval-scoped query variants
+6. **MarketDataService** — removed hardcoded 15m constants, parameterized with `fetchBarSeriesForPairAndInterval(pair, intervalLabel)`, composite cache key `"pair::interval"`
+7. **SignalEngine** — triple loop: pairs x intervals x strategies
+8. **TradingLoop** — groups signals by `(pair, interval)`
+9. **RiskManager** — interval-scoped validation and circuit breakers
+10. **Execution layer** — passes `signal.interval()` through to position/trade creation
+11. **DashboardController** — added `?interval=` param to all endpoints, new `GET /api/intervals` endpoint
+12. **All service classes** — gained `interval` parameter
+
+**API changes:**
+- All endpoints that accept `?pair=` now also accept `?interval=` (optional, defaults to primary interval)
+- New endpoint: `GET /api/intervals` returns configured intervals
+
+```
+GET /api/intervals
+[
+  { "minutes": 15, "label": "15m", "displayName": "15 min" },
+  { "minutes": 60, "label": "1h",  "displayName": "1 hour" }
+]
+```
+
+**Adding a new interval:** Just add the minutes value to `trading.intervals` in `application.yml` and restart. No code changes needed. The system will start fetching candles, evaluating strategies, and tracking performance for the new interval immediately.

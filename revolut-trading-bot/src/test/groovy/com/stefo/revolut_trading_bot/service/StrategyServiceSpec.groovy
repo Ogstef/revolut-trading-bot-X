@@ -30,7 +30,7 @@ class StrategyServiceSpec extends Specification {
     def "getResult uses primary pair when none provided"() {
         given:
         signalEngine.registeredStrategies() >> [StrategyType.EMA_CROSSOVER]
-        riskManager.currentStatusForStrategy(_, "BTC-EUR", StrategyType.EMA_CROSSOVER) >>
+        riskManager.currentStatusForStrategy(_, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >>
                 buildRiskStatus(0, BigDecimal.ZERO, 0)
 
         when:
@@ -44,7 +44,7 @@ class StrategyServiceSpec extends Specification {
     def "getResult uses provided pair"() {
         given:
         signalEngine.registeredStrategies() >> [StrategyType.EMA_CROSSOVER]
-        riskManager.currentStatusForStrategy(_, "ETH-EUR", StrategyType.EMA_CROSSOVER) >>
+        riskManager.currentStatusForStrategy(_, "ETH-EUR", _, StrategyType.EMA_CROSSOVER) >>
                 buildRiskStatus(0, BigDecimal.ZERO, 0)
 
         when:
@@ -57,7 +57,7 @@ class StrategyServiceSpec extends Specification {
     def "getResult returns one entry per registered strategy"() {
         given:
         signalEngine.registeredStrategies() >> [StrategyType.EMA_CROSSOVER, StrategyType.MACD, StrategyType.BOLLINGER]
-        riskManager.currentStatusForStrategy(_, "BTC-EUR", _) >> buildRiskStatus(0, BigDecimal.ZERO, 0)
+        riskManager.currentStatusForStrategy(_, "BTC-EUR", _, _) >> buildRiskStatus(0, BigDecimal.ZERO, 0)
 
         when:
         def result = service.getResult("BTC-EUR")
@@ -69,7 +69,7 @@ class StrategyServiceSpec extends Specification {
     def "getResult includes expected keys in each entry map"() {
         given:
         signalEngine.registeredStrategies() >> [StrategyType.EMA_CROSSOVER]
-        riskManager.currentStatusForStrategy(_, "BTC-EUR", StrategyType.EMA_CROSSOVER) >>
+        riskManager.currentStatusForStrategy(_, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >>
                 buildRiskStatus(2, BigDecimal.valueOf(-50), 1)
 
         when:
@@ -93,7 +93,7 @@ class StrategyServiceSpec extends Specification {
         def btcBalances = [(StrategyType.EMA_CROSSOVER): BigDecimal.valueOf(7_000)]
         tradingConfig.strategyBalances = ["BTC-EUR": btcBalances]
         signalEngine.registeredStrategies() >> [StrategyType.EMA_CROSSOVER]
-        riskManager.currentStatusForStrategy(BigDecimal.valueOf(7_000), "BTC-EUR", StrategyType.EMA_CROSSOVER) >>
+        riskManager.currentStatusForStrategy(BigDecimal.valueOf(7_000), "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >>
                 buildRiskStatus(0, BigDecimal.ZERO, 0)
 
         when:
@@ -101,7 +101,7 @@ class StrategyServiceSpec extends Specification {
 
         then:
         result.size() == 1
-        1 * riskManager.currentStatusForStrategy(BigDecimal.valueOf(7_000), "BTC-EUR", StrategyType.EMA_CROSSOVER) >>
+        1 * riskManager.currentStatusForStrategy(BigDecimal.valueOf(7_000), "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >>
                 buildRiskStatus(0, BigDecimal.ZERO, 0)
     }
 
@@ -114,7 +114,7 @@ class StrategyServiceSpec extends Specification {
         service.getResult("BTC-EUR")
 
         then:
-        1 * riskManager.currentStatusForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER) >>
+        1 * riskManager.currentStatusForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >>
                 buildRiskStatus(0, BigDecimal.ZERO, 0)
     }
 
@@ -128,7 +128,7 @@ class StrategyServiceSpec extends Specification {
         def result = service.getPositionForStrategy(null, StrategyType.EMA_CROSSOVER)
 
         then:
-        1 * positionService.getOpenPositions("BTC-EUR", StrategyType.EMA_CROSSOVER) >> []
+        1 * positionService.getOpenPositions("BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> []
         result.isEmpty()
     }
 
@@ -136,7 +136,7 @@ class StrategyServiceSpec extends Specification {
         given:
         def position = openBuyPosition("BTC-EUR", BigDecimal.valueOf(50_000), new BigDecimal("0.02"))
         marketDataService.getCurrentPriceForPair("BTC-EUR") >> BigDecimal.valueOf(52_500)
-        positionService.getOpenPositions("BTC-EUR", StrategyType.EMA_CROSSOVER) >> [position]
+        positionService.getOpenPositions("BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> [position]
 
         when:
         def views = service.getPositionForStrategy("BTC-EUR", StrategyType.EMA_CROSSOVER)

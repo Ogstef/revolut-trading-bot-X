@@ -15,11 +15,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Orchestrates a full signal cycle across all registered strategies and all configured pairs.
+ * Orchestrates a full signal cycle across all registered strategies, all configured pairs,
+ * and all configured intervals.
  *
- * Phase 8 change: candles are fetched ONCE per pair and then shared across all strategies
- * for that pair. The unit of evaluation is (pair × strategy), producing
- * N_pairs × N_strategies signals per cycle.
+ * Phase 11 change: candles are fetched ONCE per (pair, interval) and then shared across all
+ * strategies for that combination. The unit of evaluation is (pair × interval × strategy),
+ * producing N_pairs × N_intervals × N_strategies signals per cycle.
  *
  * The class default is readOnly — only the persist methods write.
  */
@@ -37,27 +38,32 @@ public class SignalEngine {
     private final List<TradingStrategy> strategies;
 
     /**
-     * Main multi-pair entry point for the trading loop.
+     * Main multi-pair, multi-interval entry point for the trading loop.
      *
-     * Fetches candles ONCE per configured pair, then evaluates all strategies on each pair.
+     * Fetches candles ONCE per (pair, interval), then evaluates all strategies on each combination.
      * Persists every signal.
      *
-     * Returns all (N_pairs × N_strategies) signals — the trading loop groups them by pair.
+     * Returns all (N_pairs × N_intervals × N_strategies) signals — the trading loop groups them
+     * by (pair, interval).
      */
     @Transactional
     public List<Signal> evaluateAllPairsAndPersist() {
         List<String> pairs = tradingConfig.getPairs();
+        List<String> intervalLabels = tradingConfig.intervalLabels();
         List<Signal> allSignals = new ArrayList<>();
 
         for (String pair : pairs) {
-            BarSeries series = marketDataService.fetchBarSeriesForPair(pair);
+            for (String intervalLabel : intervalLabels) {
+                BarSeries series = marketDataService.fetchBarSeriesForPairAndInterval(pair, intervalLabel);
 
-            for (TradingStrategy strategy : strategies) {
-                Signal signal = strategy.evaluate(series, pair);
-                persist(signal);
-                log.info("[{}][{}] {} confidence={} — {}",
-                        pair, strategy.strategyType(), signal.type(), signal.confidence(), signal.reason());
-                allSignals.add(signal);
+                for (TradingStrategy strategy : strategies) {
+                    Signal signal = strategy.evaluate(series, pair).withInterval(intervalLabel);
+                    persist(signal);
+                    log.info("[{}][{}][{}] {} confidence={} — {}",
+                            pair, intervalLabel, strategy.strategyType(),
+                            signal.type(), signal.confidence(), signal.reason());
+                    allSignals.add(signal);
+                }
             }
         }
 
@@ -66,8 +72,8 @@ public class SignalEngine {
 
     /**
      * Backward-compatible single-pair evaluation — fetches candles for all configured
-     * pairs but returns only the primary strategy's signal for the primary pair.
-     * Used by legacy callers.
+     * pairs and intervals but returns only the primary strategy's signal for the primary pair
+     * and primary interval. Used by legacy callers.
      */
     @Transactional
     public Signal evaluateAndPersist() {
@@ -76,22 +82,24 @@ public class SignalEngine {
     }
 
     /**
-     * Evaluates all strategies on the cached BarSeries for all pairs — no API call, no DB write.
+     * Evaluates all strategies on the cached BarSeries for all pairs and intervals — no API call, no DB write.
      * Useful for test endpoints.
      */
     public List<Signal> evaluateAllFromCache() {
         List<Signal> allSignals = new ArrayList<>();
         for (String pair : tradingConfig.getPairs()) {
-            BarSeries series = marketDataService.getBarSeriesForPair(pair);
-            for (TradingStrategy strategy : strategies) {
-                allSignals.add(strategy.evaluate(series, pair));
+            for (String intervalLabel : tradingConfig.intervalLabels()) {
+                BarSeries series = marketDataService.getBarSeriesForPairAndInterval(pair, intervalLabel);
+                for (TradingStrategy strategy : strategies) {
+                    allSignals.add(strategy.evaluate(series, pair).withInterval(intervalLabel));
+                }
             }
         }
         return allSignals;
     }
 
     /**
-     * Evaluates using cached BarSeries for the primary pair.
+     * Evaluates using cached BarSeries for the primary pair and primary interval.
      * Returns the primary strategy's signal. Backward-compatible test helper.
      */
     public Signal evaluateFromCache() {
@@ -99,7 +107,14 @@ public class SignalEngine {
     }
 
     /**
-     * Returns the N most recent signal logs for a specific pair (all strategies).
+     * Returns the N most recent signal logs for a specific pair and interval (all strategies).
+     */
+    public List<SignalLog> recentSignalsForPairAndInterval(String pair, String interval, int limit) {
+        return signalLogRepository.findRecentByPairAndInterval(pair, interval, limit);
+    }
+
+    /**
+     * Returns the N most recent signal logs for a specific pair (all strategies, all intervals).
      */
     public List<SignalLog> recentSignalsForPair(String pair, int limit) {
         return signalLogRepository.findByPairOrderByCreatedAtDesc(pair)
@@ -117,7 +132,16 @@ public class SignalEngine {
     }
 
     /**
+     * Returns recent signal logs filtered to a single (pair, interval, strategy) combination.
+     */
+    public List<SignalLog> recentSignalsForPairAndIntervalAndStrategy(
+            String pair, String interval, StrategyType strategyType, int limit) {
+        return signalLogRepository.findRecentByPairAndIntervalAndStrategy(pair, interval, strategyType, limit);
+    }
+
+    /**
      * Returns recent signal logs filtered to a single (pair, strategy) combination.
+     * Backward-compatible helper.
      */
     public List<SignalLog> recentSignalsForPairAndStrategy(String pair, StrategyType strategyType, int limit) {
         return signalLogRepository
@@ -141,13 +165,16 @@ public class SignalEngine {
 
     private Signal primarySignal(List<Signal> signals) {
         String primaryPair           = tradingConfig.primaryPair();
+        String primaryInterval       = tradingConfig.primaryInterval();
         StrategyType primaryStrategy = tradingConfig.getPrimaryStrategy();
         return signals.stream()
-                .filter(s -> s.pair().equals(primaryPair) && s.strategyType() == primaryStrategy)
+                .filter(s -> s.pair().equals(primaryPair)
+                          && s.interval().equals(primaryInterval)
+                          && s.strategyType() == primaryStrategy)
                 .findFirst()
                 .orElseGet(() -> {
-                    log.warn("Primary signal [{}/{}] not found — falling back to first",
-                            primaryPair, primaryStrategy);
+                    log.warn("Primary signal [{}/{}/{}] not found — falling back to first",
+                            primaryPair, primaryInterval, primaryStrategy);
                     return signals.get(0);
                 });
     }
@@ -156,6 +183,7 @@ public class SignalEngine {
     protected void persist(Signal signal) {
         SignalLog entry = SignalLog.builder()
                 .pair(signal.pair())
+                .interval(signal.interval())
                 .strategyName(signal.strategyType())
                 .signalType(signal.type())
                 .confidence(signal.confidence())

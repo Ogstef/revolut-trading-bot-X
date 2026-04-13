@@ -61,6 +61,7 @@ public class PaperTradingService {
 
         Position position = Position.builder()
                 .pair(signal.pair())
+                .interval(signal.interval())
                 .side(side)
                 .entryPrice(currentPrice)
                 .quantity(quantity)
@@ -76,6 +77,7 @@ public class PaperTradingService {
         Trade trade = Trade.builder()
                 .position(position)
                 .pair(signal.pair())
+                .interval(signal.interval())
                 .side(side)
                 .entryPrice(currentPrice)
                 .quantity(quantity)

@@ -29,8 +29,13 @@ public class StrategyService {
 
 
     public List<Map<String, Object>> getResult(String pair) {
+        return getResult(pair, null);
+    }
+
+    public List<Map<String, Object>> getResult(String pair, String interval) {
 
         String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
+        String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
         List<StrategyType> registered = signalEngine.registeredStrategies();
         BigDecimal fallbackBalance = tradingConfig.getPaperBalance();
 
@@ -41,9 +46,10 @@ public class StrategyService {
                             && allBalances.get(effectivePair).containsKey(strategyType))
                             ? allBalances.get(effectivePair).get(strategyType)
                             : fallbackBalance;
-                    RiskManager.RiskStatus risk = riskManager.currentStatusForStrategy(stratBalance, effectivePair, strategyType);
+                    RiskManager.RiskStatus risk = riskManager.currentStatusForStrategy(stratBalance, effectivePair, effectiveInterval, strategyType);
                     Map<String, Object> entry = new LinkedHashMap<>();
                     entry.put("pair", effectivePair);
+                    entry.put("interval", effectiveInterval);
                     entry.put("name", strategyType.name());
                     entry.put("displayName", strategyType.getDisplayName());
                     entry.put("openPositions", risk.openPositions());
@@ -56,9 +62,14 @@ public class StrategyService {
     }
 
     public List<PositionView> getPositionForStrategy(String pair, StrategyType strategyType) {
-        String effectivePair = pair != null ? pair :tradingConfig.primaryPair();
+        return getPositionForStrategy(pair, null, strategyType);
+    }
+
+    public List<PositionView> getPositionForStrategy(String pair, String interval, StrategyType strategyType) {
+        String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
+        String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
         BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(effectivePair);
-        List<Position> open = positionService.getOpenPositions(effectivePair,strategyType);
+        List<Position> open = positionService.getOpenPositions(effectivePair, effectiveInterval, strategyType);
         return open.stream().map(p -> toPositionView(p, currentPrice)).toList();
     }
 }

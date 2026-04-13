@@ -83,7 +83,7 @@ public class StochRsiStrategy implements TradingStrategy {
             String reason = String.format("StochRSI crossed above %.0f — stoch=%.1f (was %.1f)",
                     OVERSOLD * 100, stochNow * 100, stochPrev * 100);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(74), reason,
-                    pair, StrategyType.STOCH_RSI, now, stochDisplay, null, rsiDisplay, price);
+                    pair, null, StrategyType.STOCH_RSI, now, stochDisplay, null, rsiDisplay, price);
         }
 
         // Entering overbought
@@ -91,7 +91,7 @@ public class StochRsiStrategy implements TradingStrategy {
             String reason = String.format("StochRSI crossed above %.0f — stoch=%.1f (was %.1f)",
                     OVERBOUGHT * 100, stochNow * 100, stochPrev * 100);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(70), reason,
-                    pair, StrategyType.STOCH_RSI, now, stochDisplay, null, rsiDisplay, price);
+                    pair, null, StrategyType.STOCH_RSI, now, stochDisplay, null, rsiDisplay, price);
         }
 
         String reason = String.format("StochRSI no threshold crossing — stoch=%.1f", stochNow * 100);
@@ -101,7 +101,7 @@ public class StochRsiStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal stochDisplay, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.STOCH_RSI, evaluatedAt, stochDisplay, null, null, price);
+                pair, null, StrategyType.STOCH_RSI, evaluatedAt, stochDisplay, null, null, price);
     }
 
     private BigDecimal bd(double value) {

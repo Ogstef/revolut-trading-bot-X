@@ -83,7 +83,7 @@ public class DonchianStrategy implements TradingStrategy {
             String reason = String.format("Donchian breakout UP — close=%.2f > upper=%.2f (new 20-bar high)",
                     closeNow, upperNow);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(77), reason,
-                    pair, StrategyType.DONCHIAN, now, upperVal, lowerVal, widthPct, priceVal);
+                    pair, null, StrategyType.DONCHIAN, now, upperVal, lowerVal, widthPct, priceVal);
         }
 
         // Breakout to the downside: prev close was inside/above, now close is below lower
@@ -91,7 +91,7 @@ public class DonchianStrategy implements TradingStrategy {
             String reason = String.format("Donchian breakout DOWN — close=%.2f < lower=%.2f (new 20-bar low)",
                     closeNow, lowerNow);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(73), reason,
-                    pair, StrategyType.DONCHIAN, now, upperVal, lowerVal, widthPct, priceVal);
+                    pair, null, StrategyType.DONCHIAN, now, upperVal, lowerVal, widthPct, priceVal);
         }
 
         String reason = String.format("Donchian inside channel — close=%.2f in [%.2f, %.2f]",
@@ -102,7 +102,7 @@ public class DonchianStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal upper, BigDecimal lower, BigDecimal widthPct, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.DONCHIAN, evaluatedAt, upper, lower, widthPct, price);
+                pair, null, StrategyType.DONCHIAN, evaluatedAt, upper, lower, widthPct, price);
     }
 
     private BigDecimal bd(double value) {

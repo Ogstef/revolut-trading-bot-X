@@ -2,32 +2,22 @@ package com.stefo.revolut_trading_bot.controller;
 
 import com.stefo.revolut_trading_bot.alert.AlertService;
 import com.stefo.revolut_trading_bot.config.TradingConfig;
-import com.stefo.revolut_trading_bot.market.MarketDataService;
 import com.stefo.revolut_trading_bot.model.dto.*;
-import com.stefo.revolut_trading_bot.model.entity.Position;
+import com.stefo.revolut_trading_bot.service.FearGreedService;
 import com.stefo.revolut_trading_bot.model.entity.SignalLog;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
-import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
-import com.stefo.revolut_trading_bot.portfolio.PortfolioService;
 import com.stefo.revolut_trading_bot.portfolio.TradingStats;
 import com.stefo.revolut_trading_bot.portfolio.TradeService;
-import com.stefo.revolut_trading_bot.repository.PositionRepository;
-import com.stefo.revolut_trading_bot.repository.SignalLogRepository;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
-import com.stefo.revolut_trading_bot.risk.RiskManager;
 import com.stefo.revolut_trading_bot.scheduler.BotStateService;
 import com.stefo.revolut_trading_bot.service.*;
-import com.stefo.revolut_trading_bot.strategy.SignalEngine;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
-import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +44,7 @@ public class DashboardController {
     private final ConfigService configService;
     private final StrategyService strategyService;
     private final SignalService signalService;
+    private final FearGreedService fearGreedService;
 
     // ─── Status ───────────────────────────────────────────────────────────────
 
@@ -177,88 +168,127 @@ public class DashboardController {
         return ResponseEntity.ok(result);
     }
 
-    // ─── Multi-strategy endpoints (Phase 7 + Phase 8) ─────────────────────────
+    // ─── Intervals ──────────────────────────────────────────────────────────
+
+    /**
+     * Lists all configured candle intervals with labels and display names.
+     * GET /api/intervals
+     */
+    @GetMapping("/intervals")
+    public ResponseEntity<List<Map<String, Object>>> intervals() {
+        List<Map<String, Object>> result = tradingConfig.getIntervals().stream()
+                .map(mins -> {
+                    Map<String, Object> entry = new LinkedHashMap<>();
+                    entry.put("minutes", mins);
+                    entry.put("label", TradingConfig.intervalLabel(mins));
+                    entry.put("displayName", TradingConfig.intervalDisplayName(mins));
+                    return entry;
+                })
+                .toList();
+        return ResponseEntity.ok(result);
+    }
+
+    // ─── Multi-strategy endpoints (Phase 7 + Phase 8 + Phase 11) ─────────────
 
     /**
      * Lists all registered strategy names and their high-level risk stats.
-     * GET /api/strategies?pair=BTC-EUR
-     * When pair is omitted, returns stats for the primary pair.
+     * GET /api/strategies?pair=BTC-EUR&interval=15m
      */
     @GetMapping("/strategies")
     public ResponseEntity<List<Map<String, Object>>> strategies(
-            @RequestParam(required = false) String pair) {
-        return ResponseEntity.ok(strategyService.getResult(pair));
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(strategyService.getResult(pair, interval));
     }
 
     /**
      * Open positions for a single strategy enriched with live unrealised PnL.
-     * GET /api/strategies/{strategyType}/positions?pair=BTC-EUR
-     * When pair is omitted, returns positions for the primary pair.
+     * GET /api/strategies/{strategyType}/positions?pair=BTC-EUR&interval=15m
      */
     @GetMapping("/strategies/{strategyType}/positions")
     public ResponseEntity<List<PositionView>> strategyPositions(
             @PathVariable StrategyType strategyType,
-            @RequestParam(required = false) String pair) {
-        return ResponseEntity.ok(strategyService.getPositionForStrategy(pair,strategyType));
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(strategyService.getPositionForStrategy(pair, interval, strategyType));
     }
 
     /**
      * Closed trades for a single strategy.
-     * GET /api/strategies/{strategyType}/trades?pair=BTC-EUR&limit=50
-     * When pair is omitted, returns trades for the primary pair.
+     * GET /api/strategies/{strategyType}/trades?pair=BTC-EUR&interval=15m&limit=50
      */
     @GetMapping("/strategies/{strategyType}/trades")
     public ResponseEntity<List<Trade>> strategyTrades(
             @PathVariable StrategyType strategyType,
             @RequestParam(defaultValue = "50") int limit,
-            @RequestParam(required = false) String pair) {
-        String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval) {
+        String effectivePair     = pair != null ? pair : tradingConfig.primaryPair();
+        String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
         return ResponseEntity.ok(
-                tradeRepository.findRecentTradesByPairAndStrategy(effectivePair, strategyType, limit));
+                tradeRepository.findRecentTradesByPairAndIntervalAndStrategy(
+                        effectivePair, effectiveInterval, strategyType, limit));
     }
 
     /**
      * Win rate, PnL, expectancy for a single strategy.
-     * GET /api/strategies/{strategyType}/stats?pair=BTC-EUR
-     * When pair is omitted, returns stats for the primary pair.
+     * GET /api/strategies/{strategyType}/stats?pair=BTC-EUR&interval=15m
      */
     @GetMapping("/strategies/{strategyType}/stats")
-    public ResponseEntity<TradingStats> strategyStats(@PathVariable StrategyType strategyType) {
-        return ResponseEntity.ok(tradeService.getStatsForStrategy(strategyType));
+    public ResponseEntity<TradingStats> strategyStats(
+            @PathVariable StrategyType strategyType,
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(tradeService.getStatsForStrategy(pair, interval, strategyType));
     }
 
     /**
      * PnL breakdown (daily/weekly/monthly/all-time) for a single strategy.
-     * GET /api/strategies/{strategyType}/pnl?pair=BTC-EUR
-     * When pair is omitted, returns breakdown for the primary pair.
+     * GET /api/strategies/{strategyType}/pnl?pair=BTC-EUR&interval=15m
      */
     @GetMapping("/strategies/{strategyType}/pnl")
-    public ResponseEntity<PnlBreakdown> strategyPnl(@PathVariable StrategyType strategyType) {
-        return ResponseEntity.ok(tradeService.getPnlBreakdownForStrategy(strategyType));
+    public ResponseEntity<PnlBreakdown> strategyPnl(
+            @PathVariable StrategyType strategyType,
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(tradeService.getPnlBreakdownForStrategy(pair, interval, strategyType));
     }
 
     /**
      * Recent signal logs for a single strategy, newest first.
-     * GET /api/strategies/{strategyType}/signals?pair=BTC-EUR&limit=20
-     * When pair is omitted, returns signals for the primary pair.
+     * GET /api/strategies/{strategyType}/signals?pair=BTC-EUR&interval=15m&limit=20
      */
     @GetMapping("/strategies/{strategyType}/signals")
     public ResponseEntity<List<SignalLog>> strategySignals(
             @PathVariable StrategyType strategyType,
             @RequestParam(defaultValue = "20") int limit,
-            @RequestParam(required = false) String pair) {
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval) {
         return ResponseEntity.ok(
-                signalService.getSignalStrategies(pair, strategyType, limit));
+                signalService.getSignalStrategies(pair, interval, strategyType, limit));
     }
 
     /**
-     * BUY/SELL/HOLD signal counts grouped by strategy — shows how often each strategy fires.
-     * GET /api/signals/summary?pair=BTC-EUR
-     * When pair is omitted, returns summary for the primary pair.
+     * BUY/SELL/HOLD signal counts grouped by strategy.
+     * GET /api/signals/summary?pair=BTC-EUR&interval=15m
      */
     @GetMapping("/signals/summary")
     public ResponseEntity<List<Map<String, Object>>> signalsSummary(
-            @RequestParam(required = false) String pair) {
-        return ResponseEntity.ok(signalService.getSummary(pair));
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(signalService.getSummary(pair, interval));
+    }
+
+    // ─── Market sentiment ─────────────────────────────────────────────────────
+
+    /**
+     * Crypto Fear & Greed Index from alternative.me. Cached 1 hour — indicator only.
+     * GET /api/market/fear-greed
+     */
+    @GetMapping("/market/fear-greed")
+    public ResponseEntity<FearGreedResponse> fearGreed() {
+        FearGreedResponse result = fearGreedService.get();
+        if (result == null) return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(result);
     }
 }

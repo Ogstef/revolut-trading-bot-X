@@ -89,7 +89,7 @@ public class AdxDiStrategy implements TradingStrategy {
             String reason = String.format("+DI crossed above -DI with ADX=%.1f (strong trend) — +DI=%.1f -DI=%.1f",
                     adxNow, plusNow, minusNow);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(78), reason,
-                    pair, StrategyType.ADX_DI, now, plusVal, minusVal, adxVal, null);
+                    pair, null, StrategyType.ADX_DI, now, plusVal, minusVal, adxVal, null);
         }
 
         // SELL: -DI crosses above +DI AND ADX is strong
@@ -97,7 +97,7 @@ public class AdxDiStrategy implements TradingStrategy {
             String reason = String.format("-DI crossed above +DI with ADX=%.1f (strong trend) — +DI=%.1f -DI=%.1f",
                     adxNow, plusNow, minusNow);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(74), reason,
-                    pair, StrategyType.ADX_DI, now, plusVal, minusVal, adxVal, null);
+                    pair, null, StrategyType.ADX_DI, now, plusVal, minusVal, adxVal, null);
         }
 
         // Determine reason for hold
@@ -116,7 +116,7 @@ public class AdxDiStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal plusDi, BigDecimal minusDi, BigDecimal adx, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.ADX_DI, evaluatedAt, plusDi, minusDi, adx, price);
+                pair, null, StrategyType.ADX_DI, evaluatedAt, plusDi, minusDi, adx, price);
     }
 
     private BigDecimal bd(double value) {

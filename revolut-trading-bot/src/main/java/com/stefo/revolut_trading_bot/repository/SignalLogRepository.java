@@ -39,4 +39,31 @@ public interface SignalLogRepository extends JpaRepository<SignalLog, Long> {
     @org.springframework.data.jpa.repository.Query(
             "SELECT s.strategyName, s.signalType, COUNT(s) FROM SignalLog s WHERE s.pair = :pair GROUP BY s.strategyName, s.signalType")
     List<Object[]> countSignalsByStrategy(@org.springframework.data.repository.query.Param("pair") String pair);
+
+    // ─── Pair + interval + strategy scoped queries (Phase 11 — multi-interval) ──
+
+    @Query("""
+            SELECT s FROM SignalLog s
+            WHERE s.pair = :pair AND s.interval = :interval AND s.strategyName = :strategyName
+            ORDER BY s.createdAt DESC
+            LIMIT :limit
+            """)
+    List<SignalLog> findRecentByPairAndIntervalAndStrategy(@Param("pair") String pair,
+                                                            @Param("interval") String interval,
+                                                            @Param("strategyName") StrategyType strategyName,
+                                                            @Param("limit") int limit);
+
+    @Query("""
+            SELECT s FROM SignalLog s
+            WHERE s.pair = :pair AND s.interval = :interval
+            ORDER BY s.createdAt DESC
+            LIMIT :limit
+            """)
+    List<SignalLog> findRecentByPairAndInterval(@Param("pair") String pair,
+                                                @Param("interval") String interval,
+                                                @Param("limit") int limit);
+
+    @Query("SELECT s.strategyName, s.signalType, COUNT(s) FROM SignalLog s WHERE s.pair = :pair AND s.interval = :interval GROUP BY s.strategyName, s.signalType")
+    List<Object[]> countSignalsByStrategyAndInterval(@Param("pair") String pair,
+                                                      @Param("interval") String interval);
 }

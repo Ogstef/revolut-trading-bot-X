@@ -79,7 +79,7 @@ public class CciStrategy implements TradingStrategy {
             String reason = String.format("CCI recovered from oversold — cci=%.1f (was %.1f, crossed %.0f)",
                     cciNow, cciPrev, OVERSOLD);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(71), reason,
-                    pair, StrategyType.CCI, now, null, null, cciVal, priceVal);
+                    pair, null, StrategyType.CCI, now, null, null, cciVal, priceVal);
         }
 
         // Entering overbought: CCI was below +100, now at-or-above +100
@@ -87,7 +87,7 @@ public class CciStrategy implements TradingStrategy {
             String reason = String.format("CCI entered overbought — cci=%.1f (was %.1f, crossed %.0f)",
                     cciNow, cciPrev, OVERBOUGHT);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(67), reason,
-                    pair, StrategyType.CCI, now, null, null, cciVal, priceVal);
+                    pair, null, StrategyType.CCI, now, null, null, cciVal, priceVal);
         }
 
         String zone   = cciNow < OVERSOLD ? "oversold" : cciNow > OVERBOUGHT ? "overbought" : "neutral";
@@ -98,7 +98,7 @@ public class CciStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal cciVal, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.CCI, evaluatedAt, null, null, cciVal, price);
+                pair, null, StrategyType.CCI, evaluatedAt, null, null, cciVal, price);
     }
 
     private BigDecimal bd(double value) {

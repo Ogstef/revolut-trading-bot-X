@@ -42,6 +42,40 @@ public class MarketDataClient {
     }
 
     /**
+     * Fetches only candles newer than sinceEpochMs — use this on every cycle after
+     * the initial load to avoid re-downloading thousands of candles we already have.
+     *
+     * The Revolut API caps the lookup window at 50000 candles. Asking for all candles
+     * since epoch 0 on anything larger than 1-minute intervals exceeds this limit and
+     * returns HTTP 400. When {@code sinceEpochMs} would request more than ~5000 candles,
+     * we omit the {@code since} parameter so the API returns its default last 5000 —
+     * plenty for any strategy warmup (Ichimoku needs the most at 79 bars).
+     *
+     * @param sinceEpochMs epoch milliseconds of the last known candle open time (0 = initial load)
+     */
+    public List<CandleResponse> getCandles(String symbol, int intervalMinutes, long sinceEpochMs) {
+        log.debug("Fetching candles for {} interval {}m since {}", symbol, intervalMinutes, sinceEpochMs);
+
+        // API limit: 50000 candles in the lookup window. We target 5000 (API default)
+        // to stay well within bounds for any supported interval.
+        long maxWindowMs = 5000L * intervalMinutes * 60_000L;
+        long oldestAllowed = System.currentTimeMillis() - maxWindowMs;
+        boolean sinceTooOld = sinceEpochMs <= 0 || sinceEpochMs < oldestAllowed;
+
+        String query = sinceTooOld
+                ? "interval=" + intervalMinutes
+                : "interval=" + intervalMinutes + "&since=" + sinceEpochMs;
+
+        if (sinceTooOld && sinceEpochMs > 0) {
+            log.info("Since={} is older than max window ({} candles of {}m) — fetching default last 5000 candles",
+                    sinceEpochMs, 5000, intervalMinutes);
+        }
+
+        return apiClient.getAuthenticated("/candles/" + symbol, query,
+                new TypeReference<>() {});
+    }
+
+    /**
      * Real-time ticker snapshot (best bid, ask, mid, last traded price).
      * Returns a list; filter by symbol in the query param.
      */

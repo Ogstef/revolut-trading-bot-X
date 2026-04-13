@@ -32,6 +32,10 @@ public class Trade {
     @Column(nullable = false, length = 20)
     private String pair;
 
+    @Column(name = "interval", nullable = false, length = 10)
+    @Builder.Default
+    private String interval = "15m";
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 10)
     private OrderSide side;

@@ -77,7 +77,7 @@ public class RsiMomentumStrategy implements TradingStrategy {
             String reason = String.format("RSI recovered from oversold — rsi=%.1f (was %.1f, crossed %.0f)",
                     rsiNow, rsiPrev, OVERSOLD);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(73), reason,
-                    pair, StrategyType.RSI_MOMENTUM, now, null, null, rsiNowBd, priceNow);
+                    pair, null, StrategyType.RSI_MOMENTUM, now, null, null, rsiNowBd, priceNow);
         }
 
         // Entering overbought: RSI was below 70, now at-or-above 70
@@ -85,7 +85,7 @@ public class RsiMomentumStrategy implements TradingStrategy {
             String reason = String.format("RSI entered overbought — rsi=%.1f (was %.1f, crossed %.0f)",
                     rsiNow, rsiPrev, OVERBOUGHT);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(69), reason,
-                    pair, StrategyType.RSI_MOMENTUM, now, null, null, rsiNowBd, priceNow);
+                    pair, null, StrategyType.RSI_MOMENTUM, now, null, null, rsiNowBd, priceNow);
         }
 
         String reason = String.format("RSI no threshold crossing — rsi=%.1f", rsiNow);
@@ -95,7 +95,7 @@ public class RsiMomentumStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal rsiValue, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.RSI_MOMENTUM, evaluatedAt, null, null, rsiValue, price);
+                pair, null, StrategyType.RSI_MOMENTUM, evaluatedAt, null, null, rsiValue, price);
     }
 
     private BigDecimal bd(double value) {

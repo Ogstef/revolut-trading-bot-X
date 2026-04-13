@@ -78,7 +78,7 @@ public class TripleEmaStrategy implements TradingStrategy {
             String reason = String.format("Bullish stack — EMA5=%.2f > EMA13=%.2f > EMA34=%.2f",
                     e5.doubleValue(), e13.doubleValue(), e34.doubleValue());
             return new Signal(SignalType.BUY, BigDecimal.valueOf(76), reason,
-                    pair, StrategyType.TRIPLE_EMA, now, e5, e34, e13, price);
+                    pair, null, StrategyType.TRIPLE_EMA, now, e5, e34, e13, price);
         }
 
         // Full bearish stack: EMA5 < EMA13 < EMA34
@@ -86,7 +86,7 @@ public class TripleEmaStrategy implements TradingStrategy {
             String reason = String.format("Bearish stack — EMA5=%.2f < EMA13=%.2f < EMA34=%.2f",
                     e5.doubleValue(), e13.doubleValue(), e34.doubleValue());
             return new Signal(SignalType.SELL, BigDecimal.valueOf(72), reason,
-                    pair, StrategyType.TRIPLE_EMA, now, e5, e34, e13, price);
+                    pair, null, StrategyType.TRIPLE_EMA, now, e5, e34, e13, price);
         }
 
         String reason = String.format("Mixed EMA order — EMA5=%.2f EMA13=%.2f EMA34=%.2f (sideways)",
@@ -97,7 +97,7 @@ public class TripleEmaStrategy implements TradingStrategy {
     private Signal hold(String reason, String pair, Instant evaluatedAt,
                         BigDecimal e5, BigDecimal e34, BigDecimal e13, BigDecimal price) {
         return new Signal(SignalType.HOLD, BigDecimal.valueOf(50), reason,
-                pair, StrategyType.TRIPLE_EMA, evaluatedAt, e5, e34, e13, price);
+                pair, null, StrategyType.TRIPLE_EMA, evaluatedAt, e5, e34, e13, price);
     }
 
     private BigDecimal bd(double value) {

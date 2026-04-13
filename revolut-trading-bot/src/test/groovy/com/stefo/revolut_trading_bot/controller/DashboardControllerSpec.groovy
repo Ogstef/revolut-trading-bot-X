@@ -13,6 +13,7 @@ import com.stefo.revolut_trading_bot.repository.TradeRepository
 import com.stefo.revolut_trading_bot.scheduler.BotStateService
 import com.stefo.revolut_trading_bot.service.BotStatusService
 import com.stefo.revolut_trading_bot.service.ConfigService
+import com.stefo.revolut_trading_bot.service.FearGreedService
 import com.stefo.revolut_trading_bot.service.PositionService
 import com.stefo.revolut_trading_bot.service.SignalService
 import com.stefo.revolut_trading_bot.service.StrategyService
@@ -42,16 +43,19 @@ class DashboardControllerSpec extends Specification {
     ConfigService     configService     = Mock()
     StrategyService   strategyService   = Mock()
     SignalService     signalService     = Mock()
+    FearGreedService fearGreedService     = Mock()
 
     @Subject
     DashboardController controller = new DashboardController(
             botStateService, tradingConfig, tradeService, tradeRepository,
             alertService, botStatusService, positionService, configService,
-            strategyService, signalService)
+            strategyService, signalService, fearGreedService)
 
     def setup() {
-        tradingConfig.primaryPair() >> "BTC-EUR"
-        tradingConfig.getPairs()    >> ["BTC-EUR", "ETH-EUR"]
+        tradingConfig.primaryPair()     >> "BTC-EUR"
+        tradingConfig.primaryInterval() >> "15m"
+        tradingConfig.getPairs()        >> ["BTC-EUR", "ETH-EUR"]
+        tradingConfig.getIntervals()    >> [15, 60]
     }
 
     // ─── GET /api/status ──────────────────────────────────────────────────────
@@ -240,10 +244,10 @@ class DashboardControllerSpec extends Specification {
 
     def "strategies() delegates to strategyService with the pair filter"() {
         given:
-        strategyService.getResult("BTC-EUR") >> [[name: "EMA_CROSSOVER"]]
+        strategyService.getResult("BTC-EUR", null) >> [[name: "EMA_CROSSOVER"]]
 
         when:
-        def response = controller.strategies("BTC-EUR")
+        def response = controller.strategies("BTC-EUR", null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -252,10 +256,10 @@ class DashboardControllerSpec extends Specification {
 
     def "strategies() passes null pair when not provided"() {
         given:
-        strategyService.getResult(null) >> []
+        strategyService.getResult(null, null) >> []
 
         when:
-        def response = controller.strategies(null)
+        def response = controller.strategies(null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -265,10 +269,10 @@ class DashboardControllerSpec extends Specification {
 
     def "strategyPositions() returns position views for the given strategy"() {
         given:
-        strategyService.getPositionForStrategy("BTC-EUR", StrategyType.EMA_CROSSOVER) >> []
+        strategyService.getPositionForStrategy("BTC-EUR", null, StrategyType.EMA_CROSSOVER) >> []
 
         when:
-        def response = controller.strategyPositions(StrategyType.EMA_CROSSOVER, "BTC-EUR")
+        def response = controller.strategyPositions(StrategyType.EMA_CROSSOVER, "BTC-EUR", null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -276,26 +280,26 @@ class DashboardControllerSpec extends Specification {
 
     // ─── GET /api/strategies/{name}/trades ───────────────────────────────────
 
-    def "strategyTrades() uses primary pair when none provided"() {
+    def "strategyTrades() uses primary pair and primary interval when none provided"() {
         given:
-        tradeRepository.findRecentTradesByPairAndStrategy("BTC-EUR", StrategyType.MACD, 50) >> []
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", "15m", StrategyType.MACD, 50) >> []
 
         when:
-        def response = controller.strategyTrades(StrategyType.MACD, 50, null)
+        def response = controller.strategyTrades(StrategyType.MACD, 50, null, null)
 
         then:
         response.statusCode == HttpStatus.OK
-        1 * tradeRepository.findRecentTradesByPairAndStrategy("BTC-EUR", StrategyType.MACD, 50) >> []
+        1 * tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", "15m", StrategyType.MACD, 50) >> []
     }
 
     // ─── GET /api/strategies/{name}/stats ────────────────────────────────────
 
     def "strategyStats() returns stats for the given strategy"() {
         given:
-        tradeService.getStatsForStrategy(StrategyType.BOLLINGER) >> emptyStats()
+        tradeService.getStatsForStrategy(null, null, StrategyType.BOLLINGER) >> emptyStats()
 
         when:
-        def response = controller.strategyStats(StrategyType.BOLLINGER)
+        def response = controller.strategyStats(StrategyType.BOLLINGER, null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -306,12 +310,12 @@ class DashboardControllerSpec extends Specification {
 
     def "strategyPnl() returns PnL breakdown for the strategy"() {
         given:
-        tradeService.getPnlBreakdownForStrategy(StrategyType.RSI_MOMENTUM) >>
+        tradeService.getPnlBreakdownForStrategy(null, null, StrategyType.RSI_MOMENTUM) >>
                 new PnlBreakdown(BigDecimal.valueOf(10), BigDecimal.valueOf(40),
                         BigDecimal.valueOf(100), BigDecimal.valueOf(500))
 
         when:
-        def response = controller.strategyPnl(StrategyType.RSI_MOMENTUM)
+        def response = controller.strategyPnl(StrategyType.RSI_MOMENTUM, null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -322,10 +326,10 @@ class DashboardControllerSpec extends Specification {
 
     def "strategySignals() delegates to signalService"() {
         given:
-        signalService.getSignalStrategies("BTC-EUR", StrategyType.EMA_CROSSOVER, 20) >> []
+        signalService.getSignalStrategies("BTC-EUR", null, StrategyType.EMA_CROSSOVER, 20) >> []
 
         when:
-        def response = controller.strategySignals(StrategyType.EMA_CROSSOVER, 20, "BTC-EUR")
+        def response = controller.strategySignals(StrategyType.EMA_CROSSOVER, 20, "BTC-EUR", null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -335,14 +339,14 @@ class DashboardControllerSpec extends Specification {
 
     def "signalsSummary() uses primary pair when none provided"() {
         given:
-        signalService.getSummary(null) >> []
+        signalService.getSummary(null, null) >> []
 
         when:
-        def response = controller.signalsSummary(null)
+        def response = controller.signalsSummary(null, null)
 
         then:
         response.statusCode == HttpStatus.OK
-        1 * signalService.getSummary(null) >> []
+        1 * signalService.getSummary(null, null) >> []
     }
 
     def "signalsSummary() returns signal counts per strategy"() {
@@ -351,10 +355,10 @@ class DashboardControllerSpec extends Specification {
                 [strategy: "EMA_CROSSOVER", signalType: "BUY", count: 15L],
                 [strategy: "MACD",          signalType: "SELL", count: 7L]
         ]
-        signalService.getSummary("BTC-EUR") >> summary
+        signalService.getSummary("BTC-EUR", null) >> summary
 
         when:
-        def response = controller.signalsSummary("BTC-EUR")
+        def response = controller.signalsSummary("BTC-EUR", null)
 
         then:
         response.statusCode == HttpStatus.OK

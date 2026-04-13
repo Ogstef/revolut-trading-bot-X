@@ -67,22 +67,27 @@ public class TradingLoop {
     private void runCycle() {
         log.info("══════════ Trading cycle start ══════════");
 
-        // Step 1: fetch candles ONCE per pair — all strategies share the same BarSeries per pair
+        // Step 1: fetch candles ONCE per (pair, interval) — all strategies share the same BarSeries
         List<Signal> allSignals = signalEngine.evaluateAllPairsAndPersist();
-        log.info("Evaluated {} strategies across {} pairs — {} total signals",
+        log.info("Evaluated {} strategies across {} pairs x {} intervals — {} total signals",
                 signalEngine.registeredStrategies().size(),
                 tradingConfig.getPairs().size(),
+                tradingConfig.getIntervals().size(),
                 allSignals.size());
 
-        // Step 2: group signals by pair for clean pair-level logging
-        Map<String, List<Signal>> signalsByPair = allSignals.stream()
-                .collect(Collectors.groupingBy(Signal::pair));
+        // Step 2: group signals by (pair, interval) for clean logging
+        Map<String, Map<String, List<Signal>>> signalsByPairAndInterval = allSignals.stream()
+                .collect(Collectors.groupingBy(Signal::pair,
+                        Collectors.groupingBy(Signal::interval)));
 
-        // Step 3: per-pair, per-strategy execution — fully isolated
-        signalsByPair.forEach((pair, signals) -> {
+        // Step 3: per-pair, per-interval, per-strategy execution — fully isolated
+        signalsByPairAndInterval.forEach((pair, byInterval) -> {
             BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(pair);
             log.info("[{}] Price: {}", pair, currentPrice);
-            signals.forEach(signal -> runStrategyExecution(signal, currentPrice));
+            byInterval.forEach((interval, signals) -> {
+                log.debug("[{}][{}] Processing {} signals", pair, interval, signals.size());
+                signals.forEach(signal -> runStrategyExecution(signal, currentPrice));
+            });
         });
 
         log.info("══════════ Trading cycle end ══════════");
@@ -90,25 +95,26 @@ public class TradingLoop {
 
     private void runStrategyExecution(Signal signal, BigDecimal currentPrice) {
         String pair              = signal.pair();
+        String interval          = signal.interval();
         StrategyType strategyName = signal.strategyType();
-        log.info("[{}][{}] Signal: {} | reason: {}", pair, strategyName, signal.type(), signal.reason());
+        log.info("[{}][{}][{}] Signal: {} | reason: {}", pair, interval, strategyName, signal.type(), signal.reason());
 
-        // Monitor TP/SL only for this (pair, strategy)'s open positions
-        orderExecutionService.monitorPositions(currentPrice, pair, strategyName);
+        // Monitor TP/SL only for this (pair, interval, strategy)'s open positions
+        orderExecutionService.monitorPositions(currentPrice, pair, interval, strategyName);
 
-        // Resolve balance — each (pair, strategy) has its own virtual paper balance
+        // Resolve balance — shared per (pair, strategy), NOT split by interval
         BigDecimal balance = resolveBalanceForStrategy(pair, strategyName);
-        log.info("[{}][{}] Balance: {} EUR", pair, strategyName, balance);
+        log.info("[{}][{}][{}] Balance: {} EUR", pair, interval, strategyName, balance);
 
-        // Log (pair, strategy)-scoped risk state
-        RiskManager.RiskStatus riskStatus = riskManager.currentStatusForStrategy(balance, pair, strategyName);
-        log.info("[{}][{}] Risk — openPositions: {} | dailyPnl: {} | consecutiveLosses: {} | circuitBreaker: {}",
-                pair, strategyName, riskStatus.openPositions(), riskStatus.dailyPnl(),
+        // Log (pair, interval, strategy)-scoped risk state
+        RiskManager.RiskStatus riskStatus = riskManager.currentStatusForStrategy(balance, pair, interval, strategyName);
+        log.info("[{}][{}][{}] Risk — openPositions: {} | dailyPnl: {} | consecutiveLosses: {} | circuitBreaker: {}",
+                pair, interval, strategyName, riskStatus.openPositions(), riskStatus.dailyPnl(),
                 riskStatus.consecutiveLosses(), riskStatus.anyCircuitBreakerTripped());
 
         if (riskStatus.anyCircuitBreakerTripped()) {
-            log.warn("[{}][{}] ⚠ Circuit breaker active — skipping trade execution", pair, strategyName);
-            alertService.circuitBreakerTripped(pair + "/" + strategyName
+            log.warn("[{}][{}][{}] ⚠ Circuit breaker active — skipping trade execution", pair, interval, strategyName);
+            alertService.circuitBreakerTripped(pair + "/" + interval + "/" + strategyName
                     + " openPositions=" + riskStatus.openPositions()
                     + " dailyPnl=" + riskStatus.dailyPnl()
                     + " consecutiveLosses=" + riskStatus.consecutiveLosses());
