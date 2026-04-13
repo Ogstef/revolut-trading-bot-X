@@ -51,6 +51,9 @@ trading:
       PARABOLIC_SAR: 10000.00
       ADX_DI: 10000.00
       CCI: 10000.00
+      MFI: 10000.00
+      DONCHIAN: 10000.00
+      ICHIMOKU: 10000.00
     ETH-EUR:
       EMA_CROSSOVER: 5000.00
       MACD: 5000.00
@@ -61,6 +64,9 @@ trading:
       PARABOLIC_SAR: 5000.00
       ADX_DI: 5000.00
       CCI: 5000.00
+      MFI: 5000.00
+      DONCHIAN: 5000.00
+      ICHIMOKU: 5000.00
     SOL-EUR:
       EMA_CROSSOVER: 5000.00
       MACD: 5000.00
@@ -71,6 +77,9 @@ trading:
       PARABOLIC_SAR: 5000.00
       ADX_DI: 5000.00
       CCI: 5000.00
+      MFI: 5000.00
+      DONCHIAN: 5000.00
+      ICHIMOKU: 5000.00
   strategy:
     ema-short-period: 9
     ema-long-period: 21

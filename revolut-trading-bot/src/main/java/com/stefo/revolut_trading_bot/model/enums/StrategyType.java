@@ -23,7 +23,11 @@ public enum StrategyType {
     PARABOLIC_SAR("Parabolic SAR"),
     // Tier 2
     ADX_DI("ADX + Directional Index"),
-    CCI("CCI");
+    CCI("CCI"),
+    // Phase 10
+    MFI("Money Flow Index"),
+    DONCHIAN("Donchian Breakout"),
+    ICHIMOKU("Ichimoku Cloud");
 
     /** Human-readable label used in logs and API responses. */
     private final String displayName;

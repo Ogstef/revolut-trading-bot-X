@@ -188,324 +188,6 @@ Using Ta4j library with configurable parameters.
 
 ## Build Phases
 
-### Phase 1 — Foundation ✅
-- application.yml with all config
-- Flyway migration V1__init_schema.sql (4 tables + indexes)
-- Enums: SignalType, OrderSide, OrderStatus, TradingPair, TradingMode
-- JPA Entities: Position, Trade, Candlestick, SignalLog
-- Spring Data JPA Repositories with custom queries
-- Config classes: TradingConfig, RevolutApiConfig as @ConfigurationProperties
-- **Milestone:** App boots, Flyway runs, tables created
-
-### Phase 2 — API Client & Auth ✅
-- RevolutApiSigner — Ed25519 message signing (load PEM, construct message, sign, base64 encode)
-- MarketDataClient — OkHttp-based client with signing interceptor
-- Handles all Revolut X endpoints (public + authenticated)
-- Rate limiting awareness
-- **Milestone:** Can fetch live BTC-EUR data from Revolut X
-
-### Phase 3 — Signal Engine ✅
-- MarketDataService — fetches candles (`/candles/{symbol}?interval=15`), builds Ta4j BarSeries, persists to DB
-- `TradingStrategy` interface: `Signal evaluate(BarSeries series)`
-- `EmaCrossoverStrategy` — implements EMA(9/21) + RSI(14) logic using Ta4j indicators
-- `Signal` record: type, confidence, reason, pair, evaluatedAt (Instant), emaShort, emaLong, rsi, currentPrice
-- `SignalEngine` — orchestrates fetch → evaluate → persist to signal_logs. Two modes: `evaluateAndPersist()` (API call) and `evaluateFromCache()` (no API call)
-- Test endpoints: `GET /test/signals/current`, `/test/signals/cached`, `/test/signals/history`
-- **Milestone:** Live EMA/RSI signals computed from real BTC-EUR candles ✅
-
-### Phase 4 — Risk Management & Paper Trading ✅
-- `RiskValidationResult` — record: approved, reason, positionSizeEur
-- `RiskManager` — validates concurrent positions, daily loss CB, consecutive loss CB; calculates 2% position size. `currentStatus()` for monitoring.
-- `TakeProfitStopLossManager` — calculates TP/SL prices; `checkExitCondition()` returns Optional<exitReason>
-- `PaperTradingService` — `openPosition()` creates Position + Trade; `closePosition()` fills exitPrice/PnL and marks CLOSED
-- `OrderExecutionService` — `executeSignal()` opens/closes on BUY/SELL; `monitorPositions()` checks TP/SL on all open positions
-- Test endpoints: `GET /test/risk/status`, `GET /test/risk/validate`, `POST /test/paper/simulate`, `GET /test/paper/positions`, `GET /test/paper/trades`
-- **Milestone:** Full paper trade execution from signal → risk check → simulated fill ✅
-
-### Phase 5 — Trading Loop & Portfolio ✅
-- `TradingLoop` — `@Scheduled(fixedDelay)` every 30s. Cycle: evaluate signal → monitor TP/SL → fetch balance → log risk state → execute signal → log portfolio snapshot. All exceptions caught — a bad cycle never stops the bot.
-- `PortfolioService` — `getSnapshot(currentPrice)` returns `PortfolioSnapshot`: openPositions, totalInvested, unrealisedPnl, unrealisedPnlPct
-- `TradeService` — `getStats()` returns `TradingStats`: winRate, totalPnl, averageWin/Loss, bestTrade, worstTrade, expectancy
-- `PortfolioSnapshot` + `TradingStats` — immutable record DTOs
-- Test endpoints: `GET /test/portfolio/snapshot`, `GET /test/portfolio/stats`
-- **Milestone:** Bot runs autonomously in paper mode, logs every cycle ✅
-
-### Phase 6 — Monitoring Dashboard ✅
-- `BotStateService` — `AtomicBoolean` running flag; `stop()` / `resume()` thread-safe
-- `AlertService` — structured SLF4J events: `[TRADE OPEN]`, `[TRADE CLOSE]`, `[CIRCUIT BREAKER]`, `[BOT STOP/RESUME]`. V2: swap in Telegram client.
-- `TradingLoop` — checks `BotStateService.isActive()` before every cycle; wires `AlertService` on circuit breaker
-- `PaperTradingService` — calls `alertService.positionOpened/Closed()` on every trade
-- `TradeService.getPnlBreakdown()` — returns daily/weekly/monthly/all-time PnL using `sumPnlSince()`
-- `DashboardController` (`GET/POST /api/*`):
-    - `GET /api/status` — running, mode, pair, openPositions, dailyPnl, consecutiveLosses, circuitBreakerOn
-    - `GET /api/positions` — open positions with live unrealised PnL at current market price
-    - `GET /api/trades?limit=50` — recent closed trades
-    - `GET /api/stats` — win rate, total PnL, avgWin/Loss, expectancy
-    - `GET /api/pnl` — PnL broken down by day/week/month/all-time
-    - `POST /api/emergency-stop` — stops bot immediately (open positions stay open)
-    - `POST /api/resume` — resumes bot after emergency stop
-    - `POST /api/config` — runtime config update (risk params, strategy params, paper balance); changes take effect next cycle
-- **Milestone:** Can monitor and control bot remotely via REST ✅
-
-### Phase 7 — Multi-Strategy Parallel Paper Trading
-
-**Goal:** Run N strategies simultaneously, each with its own independent virtual portfolio. Same market data, same time window — but every strategy makes its own decisions, opens its own positions, and tracks its own P&L. After weeks of data you compare them side-by-side.
-
----
-
-#### Core idea: everything is strategy-scoped
-
-Every position, trade, and signal log is tagged with `strategy_name`. The risk manager, portfolio service, and trade service all accept a `strategyName` filter. Nothing is global anymore.
-
----
-
-#### Step 1 — Flyway migration `V2__add_strategy_name.sql`
-
-```sql
-ALTER TABLE trading.signal_logs
-    ADD COLUMN strategy_name VARCHAR(50) NOT NULL DEFAULT 'EMA_CROSSOVER';
-
-ALTER TABLE trading.positions
-    ADD COLUMN strategy_name VARCHAR(50) NOT NULL DEFAULT 'EMA_CROSSOVER';
-
-ALTER TABLE trading.trades
-    ADD COLUMN strategy_name VARCHAR(50) NOT NULL DEFAULT 'EMA_CROSSOVER';
-```
-
----
-
-#### Step 2 — Update JPA entities
-
-Add to `SignalLog`, `Position`, and `Trade`:
-```java
-@Column(name = "strategy_name", nullable = false, length = 50)
-private String strategyName;
-```
-
----
-
-#### Step 3 — Update `TradingStrategy` interface
-
-```java
-public interface TradingStrategy {
-    Signal evaluate(BarSeries series);
-    String name();   // "EMA_CROSSOVER", "MACD", "BOLLINGER", "RSI_MOMENTUM"
-}
-```
-
-`EmaCrossoverStrategy.name()` returns `"EMA_CROSSOVER"`. Update its `@Component` to include the name.
-
----
-
-#### Step 4 — New strategies (all in `strategy/impl/`)
-
-All strategies receive `TradingConfig` for the pair name. Use the existing `Signal` record unchanged — repurpose fields where needed (documented below).
-
-**`MacdStrategy` — name: `"MACD"`**
-- `MACDIndicator(close, 12, 26)` → MACD line
-- `EMAIndicator(macd, 9)` → signal line
-- histogram = MACD line − signal line
-- BUY: histogram crosses above zero (prev ≤ 0, current > 0)
-- SELL: histogram crosses below zero (prev ≥ 0, current < 0)
-- HOLD: else
-- Signal fields: `emaShort` = MACD line value, `emaLong` = signal line value, `rsi` = histogram
-
-**`BollingerBandsStrategy` — name: `"BOLLINGER"`**
-- `SMAIndicator(close, 20)` → middle band
-- `StandardDeviationIndicator(close, 20)` → σ
-- upper = SMA + (2 × σ), lower = SMA − (2 × σ)
-- BUY: price crosses above lower band (prev bar price ≤ lower, current > lower)
-- SELL: price crosses above upper band (prev bar price ≤ upper, current > upper)
-- HOLD: price inside bands
-- Signal fields: `emaShort` = upper band, `emaLong` = lower band, `rsi` = %B = (price − lower) / (upper − lower) × 100
-
-**`RsiMomentumStrategy` — name: `"RSI_MOMENTUM"`**
-- `RSIIndicator(close, 14)`
-- BUY: RSI crosses above 30 (prev < 30, current ≥ 30) — recovering from oversold
-- SELL: RSI crosses above 70 (prev < 70, current ≥ 70) — entering overbought
-- HOLD: else
-- Signal fields: `emaShort` = null, `emaLong` = null, `rsi` = current RSI
-
----
-
-#### Step 5 — Update `SignalEngine`
-
-Inject `List<TradingStrategy>` — Spring autowires all implementations automatically.
-
-```java
-// Fetch candles ONCE — shared across all strategies
-BarSeries series = marketDataService.fetchAndBuildBarSeries();
-
-// Run every strategy, persist every signal
-List<Signal> allSignals = strategies.stream()
-    .map(s -> {
-        Signal signal = s.evaluate(series);
-        persist(signal, s.name());   // persist now takes strategyName
-        return signal;
-    }).toList();
-
-// Return signal from the primary strategy for the trading loop
-return allSignals.stream()
-    .filter(s -> s.strategyName().equals(config.getPrimaryStrategy()))
-    .findFirst()
-    .orElseThrow();
-```
-
-`Signal` record: add `String strategyName` field so the signal carries its own identity through the pipeline.
-
-`persist(signal, strategyName)` sets `strategyName` on `SignalLog`.
-
----
-
-#### Step 6 — Update `TradingLoop`
-
-Instead of one execution cycle, iterate all strategies:
-
-```java
-// Fetch once — returns signals for ALL strategies
-List<Signal> signals = signalEngine.evaluateAllAndPersist();
-BigDecimal currentPrice = signals.get(0).currentPrice();
-
-// Each strategy monitors and executes its own positions independently
-for (Signal signal : signals) {
-    orderExecutionService.monitorPositions(currentPrice, signal.strategyName());
-    BigDecimal balance = resolveBalance(signal.strategyName());
-    orderExecutionService.executeSignal(signal, balance, currentPrice);
-}
-```
-
----
-
-#### Step 7 — Update `OrderExecutionService`
-
-`monitorPositions(price, strategyName)` — only checks positions tagged with that strategy.
-`executeSignal(signal, balance, price)` — passes `signal.strategyName()` down to `PaperTradingService`.
-
----
-
-#### Step 8 — Update `PaperTradingService`
-
-`openPosition(signal, sizeEur, price)` — sets `strategyName` on both `Position` and `Trade` from `signal.strategyName()`.
-`closePosition(position, price, reason)` — already works; position carries the strategy name.
-
----
-
-#### Step 9 — Update `RiskManager`
-
-All queries become strategy-scoped:
-
-```java
-// concurrent positions: count only this strategy's open positions
-positionRepository.countByStatusAndStrategyName(OPEN, strategyName)
-
-// daily PnL: sum only this strategy's trades today
-tradeRepository.sumPnlSinceAndStrategyName(startOfDay, strategyName)
-
-// consecutive losses: last N trades for this strategy
-tradeRepository.findRecentTradesByPairAndStrategy(pair, strategyName, limit)
-```
-
-Each strategy has its own independent circuit breakers.
-
----
-
-#### Step 10 — Per-strategy paper balance in config
-
-```yaml
-trading:
-  primary-strategy: EMA_CROSSOVER
-  strategy-balances:
-    EMA_CROSSOVER: 10000.00
-    MACD: 10000.00
-    BOLLINGER: 10000.00
-    RSI_MOMENTUM: 10000.00
-```
-
-`TradingConfig` addition:
-```java
-private String primaryStrategy;
-private Map<String, BigDecimal> strategyBalances;
-```
-
-`resolveBalance(strategyName)` in `TradingLoop` looks up `config.getStrategyBalances().get(strategyName)`.
-
----
-
-#### Step 11 — Repository additions
-
-**`PositionRepository`:**
-```java
-long countByStatusAndStrategyName(OrderStatus status, String strategyName);
-List<Position> findByStatusAndStrategyName(OrderStatus status, String strategyName);
-```
-
-**`TradeRepository`:**
-```java
-@Query("SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t WHERE t.executedAt >= :since AND t.strategyName = :strategyName")
-BigDecimal sumPnlSinceAndStrategyName(@Param("since") LocalDateTime since, @Param("strategyName") String strategyName);
-
-@Query("SELECT t FROM Trade t WHERE t.pair = :pair AND t.strategyName = :strategyName ORDER BY t.executedAt DESC LIMIT :limit")
-List<Trade> findRecentTradesByPairAndStrategy(@Param("pair") String pair, @Param("strategyName") String strategyName, @Param("limit") int limit);
-
-List<Trade> findByStrategyNameOrderByExecutedAtDesc(String strategyName);
-```
-
-**`SignalLogRepository`:**
-```java
-List<SignalLog> findByPairAndStrategyNameOrderByCreatedAtDesc(String pair, String strategyName);
-
-@Query("SELECT s.strategyName, s.signalType, COUNT(s) FROM SignalLog s WHERE s.pair = :pair GROUP BY s.strategyName, s.signalType")
-List<Object[]> countSignalsByStrategy(@Param("pair") String pair);
-```
-
----
-
-#### Step 12 — Dashboard API additions (`DashboardController`)
-
-```
-GET /api/strategies                         — list all registered strategy names + their stats
-GET /api/strategies/{name}/positions        — open positions for one strategy with live PnL
-GET /api/strategies/{name}/trades?limit=50  — closed trades for one strategy
-GET /api/strategies/{name}/stats            — win rate, PnL, expectancy for one strategy
-GET /api/strategies/{name}/pnl             — daily/weekly/monthly PnL for one strategy
-GET /api/signals/summary                    — signal counts per strategy (BUY/SELL/HOLD breakdown)
-```
-
----
-
-#### Step 13 — Test endpoints to add to `TestController`
-
-```
-GET /test/signals/by-strategy?strategy=MACD&limit=20
-GET /test/signals/strategy-summary
-GET /test/strategies/{name}/snapshot        — portfolio snapshot for one strategy
-```
-
----
-
-#### What `Signal` record looks like after this phase
-
-```java
-public record Signal(
-    SignalType type,
-    BigDecimal confidence,
-    String reason,
-    String pair,
-    String strategyName,     // NEW
-    Instant evaluatedAt,
-    BigDecimal emaShort,
-    BigDecimal emaLong,
-    BigDecimal rsi,
-    BigDecimal currentPrice
-) {}
-```
-
----
-
-#### Milestone
-Four strategies run every 30s on the same candle data. Each has its own positions, trades, circuit breakers, and P&L. Query `trades` grouped by `strategy_name` to see who's winning.
-
----
 
 ### Phase 8 — Additional Strategies (Tier 1 + Tier 2)
 
@@ -906,3 +588,149 @@ CREATE INDEX IF NOT EXISTS idx_signal_logs_pair_strategy
 - **NEVER risk more than max-position-pct per trade**
 - **ALWAYS respect the circuit breaker** — if tripped, no trades until manually reset
 - **ALWAYS log before executing** — every order attempt must be logged before API call
+
+---
+
+## Phase 10 — Volume & Breakout Strategies (Next Session)
+
+**Goal:** Add 3 strategies that cover signal categories none of the existing 9 address:
+- Volume-based signals (MFI) — existing 9 are all price-only
+- Breakout signals (Donchian) — existing 9 are all oscillator/crossover
+- Complex multi-condition trend (Ichimoku) — existing 9 are all single-indicator
+
+**No migrations needed.** The `strategy_name` column already exists on all tables. Just implement `TradingStrategy`, add to `StrategyType`, add balances to `application.yml`, and Spring autowires them automatically.
+
+---
+
+### Step 1 — Add to `StrategyType` enum
+
+```java
+// Existing 9:
+EMA_CROSSOVER, MACD, BOLLINGER, RSI_MOMENTUM, STOCH_RSI, TRIPLE_EMA, PARABOLIC_SAR, ADX_DI, CCI
+
+// Add these 3:
+MFI("Money Flow Index"),
+DONCHIAN("Donchian Breakout"),
+ICHIMOKU("Ichimoku Cloud");
+```
+
+---
+
+### Step 2 — Add balances to `application.yml`
+
+Under `trading.strategy-balances`, add to each pair (BTC-EUR gets 10000, ETH-EUR and SOL-EUR get 5000):
+
+```yaml
+MFI: 10000.00
+DONCHIAN: 10000.00
+ICHIMOKU: 10000.00
+```
+
+---
+
+### Step 3 — Implement strategies (all in `strategy/impl/`)
+
+Same pattern as all existing strategies: `@Slf4j`, `@Component`, implement `TradingStrategy`. The `evaluate(BarSeries series, String pair)` method returns a `Signal` record.
+
+---
+
+**`MfiStrategy` — name: `MFI`**
+
+Money Flow Index — RSI weighted by volume. Detects when buying/selling pressure (via volume) diverges from price, catching reversals before they appear in price-only indicators. Unique because it's the only strategy that uses volume data.
+
+```java
+// Ta4j class:
+MFIIndicator mfi = new MFIIndicator(series, 14);
+// Range: 0–100. Overbought > 80, oversold < 20
+```
+
+- BUY: MFI crosses above 20 (prev < 20, current ≥ 20) — recovering from oversold with volume confirmation
+- SELL: MFI crosses above 80 (prev < 80, current ≥ 80) — entering overbought with volume confirmation
+- HOLD: else
+
+Minimum bars needed: 14 + 1 = 15
+
+Signal field mapping:
+- `emaShort` = null
+- `emaLong` = null
+- `rsi` = current MFI value (0–100, display like RSI)
+
+Confidence: BUY=75, SELL=71, HOLD=50
+
+---
+
+**`DonchianStrategy` — name: `DONCHIAN`**
+
+Donchian Channel breakout — the original "turtle trader" strategy. Buys when price breaks above the highest high of the last N bars, sells when price breaks below the lowest low. Pure breakout, no oscillators, no lagging averages. Generates far fewer signals than oscillator strategies — each signal is a genuine new high/low.
+
+```java
+// Ta4j classes:
+DonchianChannelUpperIndicator upper = new DonchianChannelUpperIndicator(series, 20);
+DonchianChannelLowerIndicator lower = new DonchianChannelLowerIndicator(series, 20);
+ClosePriceIndicator close = new ClosePriceIndicator(series);
+// upper = highest high over last 20 bars
+// lower = lowest low over last 20 bars
+```
+
+- BUY: current close > upper band of PREVIOUS bar (prev close ≤ prev upper, current close > current upper)
+  - i.e. price just made a new 20-bar high → breakout to the upside
+- SELL: current close < lower band of PREVIOUS bar (prev close ≥ prev lower, current close < current lower)
+  - i.e. price just made a new 20-bar low → breakout to the downside
+- HOLD: price inside the channel
+
+Minimum bars needed: 20 + 1 = 21
+
+Signal field mapping:
+- `emaShort` = upper channel value
+- `emaLong` = lower channel value
+- `rsi` = channel width as % of price ((upper - lower) / close × 100) — shows how volatile/wide the channel is
+
+Confidence: BUY=77, SELL=73, HOLD=50
+
+---
+
+**`IchimokuStrategy` — name: `ICHIMOKU`**
+
+Ichimoku Cloud — Japanese system that generates the most conditions-rich signal of all strategies. Only fires when multiple components agree: the cloud must be bullish AND price must be above the cloud AND the lagging span must confirm. This is the most selective strategy — expect the fewest signals but highest quality.
+
+```java
+// Ta4j classes (all built-in):
+IchimokuTenkanSenIndicator tenkan   = new IchimokuTenkanSenIndicator(series, 9);   // fast line
+IchimokuKijunSenIndicator kijun     = new IchimokuKijunSenIndicator(series, 26);   // slow line
+IchimokuSenkouSpanAIndicator spanA  = new IchimokuSenkouSpanAIndicator(series, tenkan, kijun);  // cloud top
+IchimokuSenkouSpanBIndicator spanB  = new IchimokuSenkouSpanBIndicator(series, 52);             // cloud bottom
+// Chikou (lagging span) = close price shifted back 26 bars = close.getValue(lastIdx - 26)
+```
+
+- BUY (all must be true):
+  - Tenkan crosses above Kijun (prev tenkan ≤ prev kijun, current tenkan > kijun) — TK cross
+  - Current close > max(spanA, spanB) — price is ABOVE the cloud
+  - SpanA > SpanB — cloud is bullish (green cloud)
+- SELL (all must be true):
+  - Tenkan crosses below Kijun (prev tenkan ≥ prev kijun, current tenkan < kijun)
+  - Current close < min(spanA, spanB) — price is BELOW the cloud
+  - SpanB > SpanA — cloud is bearish (red cloud)
+- HOLD: any condition unmet (price inside cloud = "in the fog", no trade)
+
+Minimum bars needed: 52 + 26 + 1 = 79 bars (needs the most warmup of all strategies)
+
+Signal field mapping:
+- `emaShort` = Tenkan-sen value
+- `emaLong` = Kijun-sen value
+- `rsi` = SpanA value (cloud top — most useful display value)
+
+Confidence: BUY=82, SELL=78, HOLD=50
+
+---
+
+### Step 4 — No other changes needed
+
+Spring autowires all `TradingStrategy` beans via `List<TradingStrategy>` in `SignalEngine`. Adding `@Component` to each new class is enough.
+
+Verify with `GET /api/strategies` — all 12 strategy names should appear after restart.
+
+---
+
+### Milestone
+
+12 strategies across 3 pairs = 36 independent virtual portfolios. Volume (MFI), breakout (Donchian), and multi-condition trend (Ichimoku) now cover the signal categories missing from the original 9. After several more weeks of paper data, compare expectancy across all 12 to identify the strongest candidates for live trading.
