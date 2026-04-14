@@ -84,9 +84,12 @@ public class TradingConfig {
 
     /**
      * Converts interval minutes to a human-readable label.
-     * 15 -> "15m", 60 -> "1h", 240 -> "4h", 1440 -> "1d"
+     * 15 -> "15m", 60 -> "1h", 240 -> "4h", 1440 -> "1d", 10080 -> "1w"
      */
     public static String intervalLabel(int minutes) {
+        if (minutes >= 10080 && minutes % 10080 == 0) {
+            return (minutes / 10080) + "w";
+        }
         if (minutes >= 1440 && minutes % 1440 == 0) {
             return (minutes / 1440) + "d";
         }
@@ -98,9 +101,12 @@ public class TradingConfig {
 
     /**
      * Converts an interval label back to minutes.
-     * "15m" -> 15, "1h" -> 60, "4h" -> 240, "1d" -> 1440
+     * "15m" -> 15, "1h" -> 60, "4h" -> 240, "1d" -> 1440, "1w" -> 10080
      */
     public static int intervalMinutes(String label) {
+        if (label.endsWith("w")) {
+            return Integer.parseInt(label.substring(0, label.length() - 1)) * 10080;
+        }
         if (label.endsWith("d")) {
             return Integer.parseInt(label.substring(0, label.length() - 1)) * 1440;
         }
@@ -114,9 +120,13 @@ public class TradingConfig {
     }
 
     /**
-     * Returns a display-friendly interval name (e.g. "15 min", "1 hour", "4 hours", "1 day").
+     * Returns a display-friendly interval name (e.g. "15 min", "1 hour", "4 hours", "1 day", "1 week").
      */
     public static String intervalDisplayName(int minutes) {
+        if (minutes >= 10080 && minutes % 10080 == 0) {
+            int weeks = minutes / 10080;
+            return weeks + (weeks == 1 ? " week" : " weeks");
+        }
         if (minutes >= 1440 && minutes % 1440 == 0) {
             int days = minutes / 1440;
             return days + (days == 1 ? " day" : " days");

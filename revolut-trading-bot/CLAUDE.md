@@ -2,6 +2,7 @@
 
 > **See also:** Root [`/CLAUDE.md`](../CLAUDE.md) for project-wide context (execution unit, how to run, API overview).
 > Frontend-specific instructions are in [`revolut-trading-bot-ui/CLAUDE.md`](../revolut-trading-bot-ui/CLAUDE.md).
+> **HTTP contract with the frontend:** [`../API_CONTRACT.md`](../API_CONTRACT.md) is the single source of truth for all `/api/**` endpoints, DTOs, and enums. Whenever you add/remove/rename a controller method or modify a DTO field, update that file in the same commit.
 
 ## Overview
 
@@ -57,7 +58,7 @@ All responses are wrapped: `{ "data": <payload> }` — the client unwraps this a
 
 | Method | Path | Query params | Description |
 |--------|------|--------------|-------------|
-| GET | `/candles/{symbol}` | `interval` (int, minutes: 1/5/15/30/60/240/1440…), `since` (epoch ms), `until` (epoch ms) | Historical OHLCV candles. Response field is `start` (not `timestamp`). Default returns last 5000 candles. |
+| GET | `/candles/{symbol}` | `interval` (int, minutes: 1/5/15/30/60/240/1440/10080…), `since` (epoch ms), `until` (epoch ms) | Historical OHLCV candles. Response field is `start` (not `timestamp`). Default returns last 5000 candles. |
 | GET | `/tickers` | `symbols` (comma-separated) | Real-time bid, ask, mid, last_price per symbol |
 | GET | `/order-book/{symbol}` | `limit` (1–20, default 20) | Order book depth. PriceLevel fields: `p`=price, `q`=quantity |
 | GET | `/balances` | — | Account balances |
@@ -139,7 +140,7 @@ All queries on positions, trades, and signal_logs filter by the triple `(pair, i
 ```yaml
 trading:
   pairs: [BTC-EUR, ETH-EUR, SOL-EUR]
-  intervals: [15, 60]                  # candle intervals in minutes (15m, 1h)
+  intervals: [15, 60, 240, 1440, 10080] # candle intervals in minutes (15m, 1h, 4h, 1d, 1w)
   mode: PAPER
   polling-interval-seconds: 30
   paper-balance: 10000.00
@@ -163,7 +164,7 @@ trading:
     max-consecutive-losses: 5
 ```
 
-**Interval mapping:** `15` -> `"15m"`, `60` -> `"1h"`, `240` -> `"4h"`, `1440` -> `"1d"`. Helper: `TradingConfig.intervalLabel(int minutes)`.
+**Interval mapping:** `15` -> `"15m"`, `60` -> `"1h"`, `240` -> `"4h"`, `1440` -> `"1d"`, `10080` -> `"1w"`. Helper: `TradingConfig.intervalLabel(int minutes)`.
 
 **Balance sharing:** Balances are keyed by `(pair, strategy)` and shared across intervals. A position on `(BTC-EUR, EMA_CROSSOVER, 15m)` and one on `(BTC-EUR, EMA_CROSSOVER, 1h)` draw from the same virtual balance. Positions, trades, risk checks, and P&L are fully isolated per interval.
 
@@ -795,3 +796,349 @@ GET /api/intervals
 ```
 
 **Adding a new interval:** Just add the minutes value to `trading.intervals` in `application.yml` and restart. No code changes needed. The system will start fetching candles, evaluating strategies, and tracking performance for the new interval immediately.
+
+---
+
+### Phase 12 — Crypto Sentiment Dashboard
+
+**Goal:** Add a crypto-sentiment layer that blends the Crypto Fear & Greed Index with Reddit chatter to produce a numeric indicator visible on the dashboard. This first pass is **observation-only** — persist snapshots, expose API endpoints, show a UI panel, and log sentiment alongside trading signals for later correlation analysis. **No effect on the 12 live strategies, the `SignalEngine`, the `RiskManager`, or the execution layer.** Wiring into trading decisions is deferred to a future phase once the data is trusted.
+
+**What already exists:**
+- `service/FearGreedService.java` — fetches `https://api.alternative.me/fng/?limit=1` via Spring `RestClient` with a 1h in-memory cache. Not persisted. Not scheduled. Exposed via `GET /api/market/fear-greed`. Keep this service as-is; Phase 12 wraps it with a persistence + scheduling layer on top.
+- `model/dto/FearGreedResponse.java` — `(int value, String classification, long timestamp)`. Reused.
+
+**Design decisions (locked before implementation):**
+- **Scope:** dashboard only. Zero changes to `StrategyType`, `SignalEngine`, `TradingLoop`, `RiskManager`, `OrderExecutionService`, or any `strategy/impl/*` file.
+- **Sources:** Fear & Greed Index + Reddit. Twitter is excluded (no viable free API since 2023). RSS / raw-HTML scraping is excluded (brittle, ToS minefield, would need local NLP).
+- **Reddit scoring:** chatter intensity only. No keyword polarity, no NLP, no LLM calls. The Reddit score measures *how loud Reddit is*, not sentiment direction.
+- **Per-pair:** per-subreddit mapping where possible, with market-wide fallback. F&G is always market-wide.
+
+---
+
+#### Step 1 — Flyway migration V6
+
+File: `src/main/resources/db/migration/V6__sentiment_snapshots.sql`
+
+```sql
+CREATE TABLE trading.sentiment_snapshots (
+    id              BIGSERIAL PRIMARY KEY,
+    source          VARCHAR(32)  NOT NULL,            -- FEAR_GREED | REDDIT
+    pair            VARCHAR(20),                      -- NULL = market-wide
+    score           SMALLINT     NOT NULL,            -- normalized 0..100
+    classification  VARCHAR(32)  NOT NULL,            -- e.g. "Extreme Fear", "Quiet", "Heated"
+    raw_payload     TEXT,                             -- original JSON for audit / later re-scoring
+    fetched_at      TIMESTAMP    NOT NULL,
+    CONSTRAINT chk_sentiment_score_range CHECK (score BETWEEN 0 AND 100)
+);
+
+CREATE INDEX idx_sentiment_source_fetched ON trading.sentiment_snapshots (source, fetched_at DESC);
+CREATE INDEX idx_sentiment_pair_fetched   ON trading.sentiment_snapshots (pair, fetched_at DESC);
+```
+
+All scores are normalized to 0–100 so blending is arithmetic. Raw JSON is preserved so snapshots can be re-scored later (e.g. if LLM scoring is added) without re-fetching.
+
+---
+
+#### Step 2 — Package structure
+
+All new code in a new `sentiment/` subpackage to contain blast radius. Entities and DTOs stay in existing packages for convention.
+
+```
+com.stefo.revolut_trading_bot/
+├── sentiment/
+│   ├── SentimentSource.java              # interface: List<SentimentReading> fetch()
+│   ├── SentimentService.java             # orchestrates sources, reads latest, computes blended
+│   ├── client/
+│   │   ├── FearGreedSource.java          # wraps existing FearGreedService + persists
+│   │   └── RedditSource.java             # reddit JSON API + chatter intensity scoring
+│   ├── model/
+│   │   ├── SentimentReading.java         # record: source, pair, score, classification, fetchedAt, rawJson
+│   │   └── BlendedSentiment.java         # record: pair, blendedScore, bias, List<Component>
+│   └── scheduler/
+│       └── SentimentScheduler.java       # @Scheduled refresh jobs
+├── config/
+│   └── SentimentConfig.java              # @ConfigurationProperties("sentiment")
+├── model/
+│   ├── enums/
+│   │   └── SentimentSourceType.java      # FEAR_GREED, REDDIT
+│   ├── entity/
+│   │   └── SentimentSnapshot.java        # JPA entity mapping the V6 table
+│   └── dto/
+│       ├── SentimentSnapshotDto.java
+│       └── BlendedSentimentDto.java
+├── repository/
+│   └── SentimentSnapshotRepository.java
+└── controller/
+    └── SentimentController.java          # GET /api/sentiment/**
+```
+
+---
+
+#### Step 3 — Enums, entity, repository
+
+`SentimentSourceType`:
+```java
+public enum SentimentSourceType {
+    FEAR_GREED("Fear & Greed"),
+    REDDIT("Reddit");
+
+    private final String displayName;
+    // constructor + getter — same convention as StrategyType
+}
+```
+
+`SentimentSnapshot` entity (JPA, `@Enumerated(EnumType.STRING)` on `source`, Lombok `@Data`/`@Builder`, `@Column(name = "raw_payload", columnDefinition = "TEXT")`).
+
+`SentimentSnapshotRepository extends JpaRepository<SentimentSnapshot, Long>` with at minimum:
+```java
+Optional<SentimentSnapshot> findFirstBySourceAndPairOrderByFetchedAtDesc(SentimentSourceType source, String pair);
+Optional<SentimentSnapshot> findFirstBySourceAndPairIsNullOrderByFetchedAtDesc(SentimentSourceType source);
+
+List<SentimentSnapshot> findBySourceAndPairAndFetchedAtAfterOrderByFetchedAtAsc(
+    SentimentSourceType source, String pair, LocalDateTime since);
+List<SentimentSnapshot> findBySourceAndPairIsNullAndFetchedAtAfterOrderByFetchedAtAsc(
+    SentimentSourceType source, LocalDateTime since);
+```
+
+---
+
+#### Step 4 — `SentimentSource` interface + records
+
+```java
+public interface SentimentSource {
+    SentimentSourceType sourceType();
+    boolean isEnabled();
+    List<SentimentReading> fetch();        // may return 0..N readings (multi-subreddit for Reddit)
+}
+
+public record SentimentReading(
+    SentimentSourceType source,
+    String pair,                  // null = market-wide
+    int score,                    // 0..100
+    String classification,
+    String rawJson,
+    Instant fetchedAt
+) {}
+
+public record BlendedSentiment(
+    String pair,                  // null = market-wide
+    int blendedScore,             // 0..100
+    Bias bias,                    // EXTREME_FEAR | FEAR | NEUTRAL | GREED | EXTREME_GREED
+    List<Component> components    // one per contributing source
+) {
+    public record Component(SentimentSourceType source, int score, String classification) {}
+    public enum Bias { EXTREME_FEAR, FEAR, NEUTRAL, GREED, EXTREME_GREED }
+}
+```
+
+---
+
+#### Step 5 — `FearGreedSource`
+
+- Injects the existing `FearGreedService` — calls `.get()` and converts the returned `FearGreedResponse` into a single market-wide `SentimentReading` (pair = null).
+- Score is already 0–100; classification is already human-readable.
+- `rawJson`: serialize the `FearGreedResponse` via the app's `ObjectMapper`.
+- Persists one row per refresh.
+
+---
+
+#### Step 6 — `RedditSource` — chatter intensity
+
+**HTTP:** use Spring `RestClient` (same pattern as `FearGreedService`). Reddit requires a distinctive `User-Agent` header — omitting it gets you 429s.
+
+**For each configured subreddit, per refresh:**
+1. `GET https://www.reddit.com/r/{sub}/new.json?limit=100`
+2. `GET https://www.reddit.com/r/{sub}/hot.json?limit=25` (hourly only)
+
+**Raw metrics over the last 60 min window (from `/new.json`, filter by `data.created_utc`):**
+- `postCount` — number of posts
+- `upvoteVelocity` — sum of `data.ups` across those posts
+- `commentVelocity` — sum of `data.num_comments` across those posts
+
+**Normalization to 0–100:**
+1. Load the last `sentiment.sources.reddit.history-days` (default 14) of snapshots for this subreddit's pair from `SentimentSnapshotRepository`.
+2. Parse each stored `raw_payload` to extract the three raw metrics (store them in the JSON so we don't need a separate column).
+3. For each metric: compute mean + stddev over history, then `z = (current - mean) / max(stddev, epsilon)`, clamp `z` to `[-3, 3]`, map to `[0, 100]` where 50 = mean.
+4. Final score = equal-weighted mean of the three normalized metrics, rounded to int.
+5. If history has fewer than N samples (e.g. < 24), emit score = 50 and classification = `"Warming up"` — the UI should show this state explicitly.
+
+**Classification bands:**
+
+| Score range | Classification |
+|-------------|----------------|
+| `0–19`      | Quiet          |
+| `20–39`     | Subdued        |
+| `40–60`     | Normal         |
+| `61–80`     | Heated         |
+| `81–100`    | Frenzied       |
+
+Reddit emits one `SentimentReading` per configured subreddit per refresh — mapped to the subreddit's pair, or pair = null for `cryptocurrency`.
+
+**Explicit non-goals:** do not attempt to read post body text. Do not count bullish/bearish keywords. Do not call any LLM. Chatter intensity is *not* a directional signal — this must be clear in the UI.
+
+---
+
+#### Step 7 — `SentimentService`
+
+```java
+public interface SentimentService {
+    BlendedSentiment currentBlended(String pair);                            // pair may be null
+    Optional<SentimentReading> latest(SentimentSourceType source, String pair);
+    List<SentimentReading> history(SentimentSourceType source, String pair, Duration window);
+    void refreshAll();                                                        // called by scheduler
+}
+```
+
+`currentBlended(pair)` algorithm:
+1. Load the latest F&G snapshot (market-wide). Always a component.
+2. Load the latest Reddit snapshot for the pair's mapped subreddit. If none, fall back to `r/cryptocurrency` (market-wide chatter). If neither, skip the Reddit component.
+3. `blendedScore = fngWeight * fng.score + redditWeight * reddit.score`, weights normalized over the components actually present (so if Reddit is missing, F&G gets 100% weight).
+4. `bias` derived from thresholds in config.
+
+---
+
+#### Step 8 — `SentimentScheduler`
+
+`@Component` with three `@Scheduled` methods. Cron comes from config via `@Scheduled(cron = "${sentiment.sources.*.cron-*}")` so operators can retune without a redeploy. Enable Spring scheduling (`@EnableScheduling` may already be present on the application class — verify before adding).
+
+| Method | Cron | Rationale |
+|--------|------|-----------|
+| `refreshFearGreed()` | `0 10 5 * * *` UTC | API updates once/day; fetch at 05:10 |
+| `refreshRedditNew()` | `0 */30 * * * *` | Every 30 min for post/comment velocity |
+| `refreshRedditHot()` | `0 15 * * * *` | Hourly for top posts |
+
+Each method:
+1. Checks `source.isEnabled()` — if disabled, return immediately.
+2. Calls `source.fetch()` inside a try/catch. Any exception is logged at WARN level and swallowed — **one failing source must never break the others**.
+3. Persists returned readings as `SentimentSnapshot` rows.
+
+**Startup behaviour:** trigger one immediate F&G refresh on application ready (`@EventListener(ApplicationReadyEvent.class)`) so the DB is not empty for the UI on first boot. Do not auto-trigger Reddit — wait for the first scheduled tick so we don't block startup.
+
+---
+
+#### Step 9 — `SentimentController`
+
+All endpoints under `/api/sentiment/**`. Must be documented in `API_CONTRACT.md` in the same PR — the root project instructions treat it as the canonical HTTP contract.
+
+| Method | Path | Query params | Description |
+|--------|------|--------------|-------------|
+| GET | `/api/sentiment/current` | `pair` (optional) | Latest blended sentiment for a pair. Defaults to market-wide if `pair` omitted. Returns `BlendedSentimentDto`. |
+| GET | `/api/sentiment/history` | `pair` (optional), `source` (optional: `FEAR_GREED`/`REDDIT`), `hours` (default 168) | Time-series of snapshots for charting. Returns `List<SentimentSnapshotDto>`. |
+| GET | `/api/sentiment/sources` | — | Lists configured sources with `{ name, enabled, lastFetchedAt, lastScore, lastClassification }`. Used by the UI to show source health. |
+
+The existing `GET /api/market/fear-greed` endpoint stays, backward compatible, still backed by `FearGreedService` directly (in-memory cache, snappy). The new `/api/sentiment/current` is the blended view.
+
+DTO shapes:
+
+```java
+public record SentimentSnapshotDto(
+    SentimentSourceType source,
+    String pair,                    // nullable
+    int score,
+    String classification,
+    Instant fetchedAt
+) {}
+
+public record BlendedSentimentDto(
+    String pair,                    // nullable
+    int blendedScore,
+    String bias,                    // BlendedSentiment.Bias as string name
+    List<ComponentDto> components
+) {
+    public record ComponentDto(SentimentSourceType source, int score, String classification) {}
+}
+```
+
+---
+
+#### Step 10 — `application.yml`
+
+Add under root:
+
+```yaml
+sentiment:
+  enabled: true
+  weights:
+    fear-greed: 0.6
+    reddit: 0.4
+  thresholds:                     # drive BlendedSentiment.Bias
+    extreme-fear: 25
+    fear: 40
+    greed: 60
+    extreme-greed: 75
+  sources:
+    fear-greed:
+      enabled: true
+      cron: "0 10 5 * * *"
+    reddit:
+      enabled: true
+      user-agent: "revolut-trading-bot/1.0 (sentiment-dashboard)"
+      cron-new: "0 */30 * * * *"
+      cron-hot: "0 15 * * * *"
+      history-days: 14
+      subreddit-mapping:
+        bitcoin: BTC-EUR
+        ethtrader: ETH-EUR
+        solana: SOL-EUR
+        cryptocurrency: null      # market-wide
+```
+
+`SentimentConfig` is a `@ConfigurationProperties(prefix = "sentiment")` class (same pattern as `TradingConfig`), using nested static classes for `weights`, `thresholds`, `sources.fearGreed`, `sources.reddit`. Include `@Validated` with `@NotNull` / `@PositiveOrZero` where appropriate.
+
+---
+
+#### Step 11 — Tests (Spock / Groovy)
+
+Under `src/test/groovy/com/stefo/revolut_trading_bot/sentiment/`:
+
+- `RedditSourceSpec` — normalization math (mean/stddev/clamp), empty-history fallback to 50 / "Warming up", subreddit → pair mapping, 60-min window filtering, `cryptocurrency` mapped to pair = null.
+- `SentimentServiceSpec` — blending with both sources, blending when Reddit is missing (F&G takes 100% weight), pair fallback from missing-subreddit to `r/cryptocurrency`, bias derivation from thresholds.
+- `FearGreedSourceSpec` — delegates to `FearGreedService`, persists a market-wide reading.
+- `SentimentSchedulerSpec` — one source throwing does not prevent another from persisting.
+- `SentimentControllerSpec` — shape of the three endpoints (existing `DashboardControllerSpec` is the reference style).
+
+---
+
+#### Step 12 — API_CONTRACT.md update (same PR)
+
+Append:
+- `SentimentSourceType` enum under Section 2 (shared enums).
+- The three `/api/sentiment/**` endpoints under Section 4.
+- `BlendedSentimentDto` and `SentimentSnapshotDto` under the DTO section with exact JSON examples.
+
+---
+
+#### Explicitly NOT in this phase
+
+- No new `StrategyType` value. No `SentimentStrategy`. Autowiring of `List<TradingStrategy>` must remain at 12 strategies.
+- No changes to `SignalEngine`, `TradingLoop`, `RiskManager`, or `OrderExecutionService`.
+- No veto / filter / gate on existing strategies' signals.
+- No LLM calls. No HTML scraping. No Twitter/X integration. No RSS feeds.
+- No local keyword-polarity lexicon.
+- No new indexes on `signal_logs` / `trades` / `positions`.
+
+---
+
+#### Verification checklist
+
+1. **DB migration:** `V6__sentiment_snapshots` appears in the Flyway log on startup; `\dt trading.sentiment_snapshots` shows the table and both indexes.
+2. **Regression:** `GET /api/market/fear-greed` still returns the same shape and value as before.
+3. **F&G ingestion:** after the startup `ApplicationReadyEvent` fires (or after manual refresh in dev), one row appears in `sentiment_snapshots` with `source='FEAR_GREED'`, `pair IS NULL`, a plausible `raw_payload`.
+4. **Reddit ingestion:** after the first `*/30` tick, one row per configured subreddit. Initial score ≈ 50 with classification `"Warming up"` — that is correct until history fills.
+5. **Blending endpoint:**
+   ```
+   curl 'http://localhost:8089/api/sentiment/current?pair=BTC-EUR'
+   curl 'http://localhost:8089/api/sentiment/current'                  # market-wide
+   curl 'http://localhost:8089/api/sentiment/history?pair=BTC-EUR&hours=48'
+   curl 'http://localhost:8089/api/sentiment/sources'
+   ```
+   Component breakdown present in `/current`; F&G and Reddit components match the latest snapshots.
+6. **Fallback:** temporarily drop the `solana` mapping, confirm `GET /api/sentiment/current?pair=SOL-EUR` falls back to `r/cryptocurrency` (or to F&G-only when no Reddit data exists) without erroring.
+7. **Isolation (critical):** trading behaviour is unchanged. The 12 strategies still produce signals every 30 s, `signal_logs` rows still land, `trades` and `positions` behaviour matches pre-change. Tail `TradingLoop` logs through a full cycle to confirm.
+8. **Tests:** `mvn test` — new Spock specs pass, all existing tests still pass.
+
+---
+
+#### Milestone
+
+The dashboard shows a blended sentiment indicator (0–100) per pair with its F&G and Reddit components broken out, plus a 7-day history chart. Trading is untouched. After two to four weeks of accumulated snapshots, the UI can overlay sentiment onto trade PnL for visual correlation — providing the evidence base for a future "wire sentiment into risk / strategy" phase.

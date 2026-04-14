@@ -160,7 +160,7 @@ public class TestController {
 
     /**
      * Fetches historical OHLCV candles.
-     * Interval must be one of: 1, 5, 15, 30, 60, 240, 1440 (minutes).
+     * Interval must be one of: 1, 5, 15, 30, 60, 240, 1440, 10080 (minutes).
      * GET /test/auth/candles?symbol=BTC-EUR&interval=15
      */
     @GetMapping("/auth/candles")
