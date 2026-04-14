@@ -15,7 +15,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Guards all trade attempts against the configured risk rules.
@@ -164,6 +166,93 @@ public class RiskManager {
         return currentStatusForStrategy(availableBalance, config.primaryPair(), null);
     }
 
+    // ─── Per-cycle snapshot (§3.3) ────────────────────────────────────────────
+
+    /**
+     * Builds a full-cycle snapshot of risk metrics in just 3 DB round-trips
+     * (open-position counts, today's PnL sums, recent trades for streaks),
+     * all grouped by the (pair, interval, strategy) key.
+     *
+     * The trading loop calls this once per cycle and feeds it to
+     * {@link #statusFromSnapshot(CycleSnapshot, BigDecimal, String, String, StrategyType)}
+     * per signal — replacing ~3 DB queries per signal (up to ~540 reads/cycle
+     * today with 180 signals) with 3 aggregate queries.
+     */
+    public CycleSnapshot snapshotAll() {
+        LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
+
+        // Query 1: COUNT(*) open positions grouped by (pair, interval, strategy)
+        Map<Key, Long> openPositions = new HashMap<>();
+        for (Object[] row : positionRepository.countByStatusGroupedByPairIntervalStrategy(OrderStatus.OPEN)) {
+            openPositions.put(keyOf(row), ((Number) row[3]).longValue());
+        }
+
+        // Query 2: SUM(pnl) today grouped by (pair, interval, strategy)
+        Map<Key, BigDecimal> dailyPnls = new HashMap<>();
+        for (Object[] row : tradeRepository.sumPnlSinceGroupedByPairIntervalStrategy(startOfDay)) {
+            dailyPnls.put(keyOf(row), (BigDecimal) row[3]);
+        }
+
+        // Query 3: recent trades (bounded window) → consecutive-loss streaks in memory
+        int maxStreak = config.getRisk().getMaxConsecutiveLosses();
+        LocalDateTime streakWindowStart = startOfDay.minusDays(CONSECUTIVE_LOSS_WINDOW_DAYS);
+        Map<Key, Integer> consecutiveLosses = new HashMap<>();
+        Map<Key, Boolean> streakClosed = new HashMap<>();
+        for (Trade trade : tradeRepository.findByExecutedAtAfterOrderByExecutedAtDesc(streakWindowStart)) {
+            Key key = new Key(trade.getPair(), trade.getInterval(), trade.getStrategyName());
+            if (Boolean.TRUE.equals(streakClosed.get(key))) {
+                continue;
+            }
+            int current = consecutiveLosses.getOrDefault(key, 0);
+            if (current >= maxStreak) {
+                streakClosed.put(key, true);
+                continue;
+            }
+            if (trade.getPnl() != null && trade.getPnl().compareTo(BigDecimal.ZERO) < 0) {
+                consecutiveLosses.put(key, current + 1);
+            } else {
+                streakClosed.put(key, true);
+            }
+        }
+
+        return new CycleSnapshot(openPositions, dailyPnls, consecutiveLosses);
+    }
+
+    /**
+     * Computes a {@link RiskStatus} for a (pair, interval, strategy) using values from the
+     * per-cycle snapshot — no DB access.
+     */
+    public RiskStatus statusFromSnapshot(CycleSnapshot snapshot,
+                                         BigDecimal availableBalance,
+                                         String pair,
+                                         String interval,
+                                         StrategyType strategyType) {
+        Key key = new Key(pair, interval, strategyType);
+        long openPositions = snapshot.openPositions().getOrDefault(key, 0L);
+        BigDecimal dailyPnl = snapshot.dailyPnls().getOrDefault(key, BigDecimal.ZERO);
+        int consecutive = snapshot.consecutiveLosses().getOrDefault(key, 0);
+
+        TradingConfig.Risk risk = config.getRisk();
+        BigDecimal maxDailyLoss = availableBalance
+                .multiply(risk.getMaxDailyLossPct())
+                .divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP)
+                .negate();
+
+        boolean dailyLimitBreached       = dailyPnl.compareTo(maxDailyLoss) < 0;
+        boolean consecutiveLimitBreached = consecutive >= risk.getMaxConsecutiveLosses();
+        boolean positionLimitBreached    = openPositions >= risk.getMaxConcurrentPositions();
+
+        return new RiskStatus(openPositions, dailyPnl, consecutive,
+                dailyLimitBreached, consecutiveLimitBreached, positionLimitBreached);
+    }
+
+    /** How far back to look when computing consecutive-loss streaks in the per-cycle snapshot. */
+    private static final int CONSECUTIVE_LOSS_WINDOW_DAYS = 30;
+
+    private static Key keyOf(Object[] row) {
+        return new Key((String) row[0], (String) row[1], (StrategyType) row[2]);
+    }
+
     // ─── Private helpers ──────────────────────────────────────────────────────
 
     private int countConsecutiveLosses(String pair, String interval, StrategyType strategyType) {
@@ -197,4 +286,18 @@ public class RiskManager {
             return dailyCircuitBreakerTripped || consecutiveCircuitBreakerTripped;
         }
     }
+
+    /** Composite key for the per-cycle snapshot — mirrors the (pair, interval, strategy) triple. */
+    public record Key(String pair, String interval, StrategyType strategy) {}
+
+    /**
+     * Bulk-loaded risk metrics for every (pair, interval, strategy) that had activity
+     * this cycle. Populated once per {@link #snapshotAll()} call and consumed per-signal
+     * via {@link #statusFromSnapshot}.
+     */
+    public record CycleSnapshot(
+            Map<Key, Long> openPositions,
+            Map<Key, BigDecimal> dailyPnls,
+            Map<Key, Integer> consecutiveLosses
+    ) {}
 }

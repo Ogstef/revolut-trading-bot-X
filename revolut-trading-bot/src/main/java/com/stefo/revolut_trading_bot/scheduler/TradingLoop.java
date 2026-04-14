@@ -75,25 +75,29 @@ public class TradingLoop {
                 tradingConfig.getIntervals().size(),
                 allSignals.size());
 
-        // Step 2: group signals by (pair, interval) for clean logging
+        // Step 2: per-cycle risk snapshot — 3 aggregate queries replace ~3 queries per signal
+        RiskManager.CycleSnapshot riskSnapshot = riskManager.snapshotAll();
+
+        // Step 3: group signals by (pair, interval) for clean logging
         Map<String, Map<String, List<Signal>>> signalsByPairAndInterval = allSignals.stream()
                 .collect(Collectors.groupingBy(Signal::pair,
                         Collectors.groupingBy(Signal::interval)));
 
-        // Step 3: per-pair, per-interval, per-strategy execution — fully isolated
+        // Step 4: per-pair, per-interval, per-strategy execution — fully isolated
         signalsByPairAndInterval.forEach((pair, byInterval) -> {
             BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(pair);
             log.info("[{}] Price: {}", pair, currentPrice);
             byInterval.forEach((interval, signals) -> {
                 log.debug("[{}][{}] Processing {} signals", pair, interval, signals.size());
-                signals.forEach(signal -> runStrategyExecution(signal, currentPrice));
+                signals.forEach(signal -> runStrategyExecution(signal, currentPrice, riskSnapshot));
             });
         });
 
         log.info("══════════ Trading cycle end ══════════");
     }
 
-    private void runStrategyExecution(Signal signal, BigDecimal currentPrice) {
+    private void runStrategyExecution(Signal signal, BigDecimal currentPrice,
+                                      RiskManager.CycleSnapshot riskSnapshot) {
         String pair              = signal.pair();
         String interval          = signal.interval();
         StrategyType strategyName = signal.strategyType();
@@ -106,8 +110,9 @@ public class TradingLoop {
         BigDecimal balance = resolveBalanceForStrategy(pair, strategyName);
         log.info("[{}][{}][{}] Balance: {} EUR", pair, interval, strategyName, balance);
 
-        // Log (pair, interval, strategy)-scoped risk state
-        RiskManager.RiskStatus riskStatus = riskManager.currentStatusForStrategy(balance, pair, interval, strategyName);
+        // Read risk state from the per-cycle snapshot — no per-signal DB round-trip
+        RiskManager.RiskStatus riskStatus =
+                riskManager.statusFromSnapshot(riskSnapshot, balance, pair, interval, strategyName);
         log.info("[{}][{}][{}] Risk — openPositions: {} | dailyPnl: {} | consecutiveLosses: {} | circuitBreaker: {}",
                 pair, interval, strategyName, riskStatus.openPositions(), riskStatus.dailyPnl(),
                 riskStatus.consecutiveLosses(), riskStatus.anyCircuitBreakerTripped());

@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,4 +21,7 @@ public interface CandlestickRepository extends JpaRepository<Candlestick, Long> 
             String pair, String interval, LocalDateTime timestamp);
 
     Optional<Candlestick> findTopByPairAndIntervalOrderByTimestampDesc(String pair, String interval);
+
+    List<Candlestick> findByPairAndIntervalAndTimestampIn(
+            String pair, String interval, Collection<LocalDateTime> timestamps);
 }

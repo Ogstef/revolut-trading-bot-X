@@ -51,6 +51,7 @@ public class SignalEngine {
         List<String> pairs = tradingConfig.getPairs();
         List<String> intervalLabels = tradingConfig.intervalLabels();
         List<Signal> allSignals = new ArrayList<>();
+        List<SignalLog> logsToPersist = new ArrayList<>(pairs.size() * intervalLabels.size() * strategies.size());
 
         for (String pair : pairs) {
             for (String intervalLabel : intervalLabels) {
@@ -58,7 +59,7 @@ public class SignalEngine {
 
                 for (TradingStrategy strategy : strategies) {
                     Signal signal = strategy.evaluate(series, pair).withInterval(intervalLabel);
-                    persist(signal);
+                    logsToPersist.add(toSignalLog(signal));
                     log.info("[{}][{}][{}] {} confidence={} — {}",
                             pair, intervalLabel, strategy.strategyType(),
                             signal.type(), signal.confidence(), signal.reason());
@@ -67,6 +68,7 @@ public class SignalEngine {
             }
         }
 
+        signalLogRepository.saveAll(logsToPersist);
         return allSignals;
     }
 
@@ -179,9 +181,12 @@ public class SignalEngine {
                 });
     }
 
-    @Transactional
-    protected void persist(Signal signal) {
-        SignalLog entry = SignalLog.builder()
+    /**
+     * Builds a {@link SignalLog} entity from a {@link Signal} without persisting it.
+     * Used by {@link #evaluateAllPairsAndPersist()} so the triple loop can batch-save via saveAll.
+     */
+    private SignalLog toSignalLog(Signal signal) {
+        return SignalLog.builder()
                 .pair(signal.pair())
                 .interval(signal.interval())
                 .strategyName(signal.strategyType())
@@ -193,6 +198,5 @@ public class SignalEngine {
                 .rsi(signal.rsi())
                 .currentPrice(signal.currentPrice())
                 .build();
-        signalLogRepository.save(entry);
     }
 }

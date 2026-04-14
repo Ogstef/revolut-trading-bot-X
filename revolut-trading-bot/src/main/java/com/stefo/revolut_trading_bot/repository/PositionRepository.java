@@ -5,6 +5,7 @@ import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -42,4 +43,17 @@ public interface PositionRepository extends JpaRepository<Position, Long> {
             OrderStatus status, String pair, String interval, StrategyType strategyName);
 
     List<Position> findByPairAndIntervalAndStatus(String pair, String interval, OrderStatus status);
+
+    /**
+     * Aggregates open-position counts grouped by (pair, interval, strategy) in a single query —
+     * backs the per-cycle risk snapshot so the trading loop replaces N_keys scalar COUNTs with one.
+     * Returns rows: [String pair, String interval, StrategyType strategyName, Long count].
+     */
+    @Query("""
+            SELECT p.pair, p.interval, p.strategyName, COUNT(p)
+            FROM Position p
+            WHERE p.status = :status
+            GROUP BY p.pair, p.interval, p.strategyName
+            """)
+    List<Object[]> countByStatusGroupedByPairIntervalStrategy(@Param("status") OrderStatus status);
 }

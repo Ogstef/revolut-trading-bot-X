@@ -16,10 +16,12 @@ import org.ta4j.core.num.DecimalNum;
 
 import java.math.BigDecimal;
 import java.time.*;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -37,36 +39,22 @@ public class MarketDataService {
     // ─── Public API ──────────────────────────────────────────────────────────
 
     /**
-     * Fetches the latest candles for the given pair and interval from the Revolut API,
-     * persists new/updated candles, rebuilds the BarSeries, and caches it.
+     * Fetches the latest candles from the Revolut API, persists them, and incrementally
+     * updates the cached BarSeries for this (pair, interval).
      *
-     * @param pair          trading pair e.g. "BTC-EUR"
-     * @param intervalLabel interval label e.g. "15m", "1h"
-     * @return the freshly built BarSeries for this (pair, interval)
+     * Hot-path optimization: on subsequent cycles we only append the new candles returned
+     * by the API instead of rebuilding the full BarSeries from the DB. The first call per
+     * (pair, interval) still warms the cache from the DB.
+     *
+     * The whole update runs inside {@link Map#compute(Object, java.util.function.BiFunction)}
+     * so concurrent callers (trading loop vs REST test endpoints) can't double-fetch.
      */
     public BarSeries fetchBarSeriesForPairAndInterval(String pair, String intervalLabel) {
         int intervalMinutes = TradingConfig.intervalMinutes(intervalLabel);
         Duration barDuration = Duration.ofMinutes(intervalMinutes);
+        String key = cacheKey(pair, intervalLabel);
 
-        // Find the latest candle we already have so we only download new ones.
-        // On the very first run (empty DB) sinceMs=0 → API returns full history.
-        long sinceMs = candlestickRepository
-                .findTopByPairAndIntervalOrderByTimestampDesc(pair, intervalLabel)
-                .map(c -> c.getTimestamp().toInstant(ZoneOffset.UTC).toEpochMilli())
-                .orElse(0L);
-
-        log.info("Fetching candles for {} interval {} since={}", pair, intervalLabel, sinceMs);
-
-        List<CandleResponse> candles = marketDataClient.getCandles(pair, intervalMinutes, sinceMs);
-        log.info("[{}][{}] Received {} new candles from API", pair, intervalLabel, candles.size());
-
-        persistCandles(candles, pair, intervalLabel);
-
-        BarSeries series = buildBarSeries(pair, intervalLabel, barDuration);
-        barSeriesMap.put(cacheKey(pair, intervalLabel), series);
-
-        log.info("[{}][{}] BarSeries built with {} bars", pair, intervalLabel, series.getBarCount());
-        return series;
+        return barSeriesMap.compute(key, (k, cached) -> updateSeries(pair, intervalLabel, intervalMinutes, barDuration, cached));
     }
 
     /**
@@ -82,15 +70,11 @@ public class MarketDataService {
      */
     public BarSeries getBarSeriesForPairAndInterval(String pair, String intervalLabel) {
         String key = cacheKey(pair, intervalLabel);
-        BarSeries cached = barSeriesMap.get(key);
-        if (cached != null) {
-            return cached;
-        }
-        log.debug("[{}][{}] No cached BarSeries — building from DB", pair, intervalLabel);
         Duration barDuration = Duration.ofMinutes(TradingConfig.intervalMinutes(intervalLabel));
-        BarSeries series = buildBarSeriesFromDb(pair, intervalLabel, barDuration);
-        barSeriesMap.put(key, series);
-        return series;
+        return barSeriesMap.computeIfAbsent(key, k -> {
+            log.debug("[{}][{}] No cached BarSeries — building from DB", pair, intervalLabel);
+            return buildBarSeriesFromDb(pair, intervalLabel, barDuration);
+        });
     }
 
     /**
@@ -157,18 +141,78 @@ public class MarketDataService {
         return mid;
     }
 
+    /**
+     * Fetches candles from the API, persists them, and returns an updated BarSeries.
+     * - First call (cached == null): build the full series from the DB after persisting.
+     * - Subsequent calls: append/replace only the bars returned by the API.
+     */
+    private BarSeries updateSeries(String pair, String intervalLabel, int intervalMinutes,
+                                   Duration barDuration, BarSeries cached) {
+        long sinceMs = resolveSinceMs(pair, intervalLabel, barDuration, cached);
+        log.info("Fetching candles for {} interval {} since={}", pair, intervalLabel, sinceMs);
+
+        List<CandleResponse> candles = marketDataClient.getCandles(pair, intervalMinutes, sinceMs);
+        log.info("[{}][{}] Received {} candles from API", pair, intervalLabel, candles.size());
+
+        persistCandles(candles, pair, intervalLabel);
+
+        BarSeries series;
+        if (cached == null) {
+            series = buildBarSeriesFromDb(pair, intervalLabel, barDuration);
+            log.info("[{}][{}] BarSeries built from DB with {} bars (cold start)",
+                    pair, intervalLabel, series.getBarCount());
+        } else {
+            int before = cached.getBarCount();
+            appendOrReplaceBars(cached, candles, barDuration);
+            log.info("[{}][{}] BarSeries incrementally updated: {} → {} bars",
+                    pair, intervalLabel, before, cached.getBarCount());
+            series = cached;
+        }
+        return series;
+    }
+
+    /**
+     * Picks the 'since' epoch ms for the next candle fetch:
+     *   - cached series present: the last bar's start time (replaces the still-forming bar and picks up any new ones)
+     *   - no cache but DB has candles: latest persisted candle timestamp
+     *   - empty DB: 0 (full history)
+     */
+    private long resolveSinceMs(String pair, String intervalLabel, Duration barDuration, BarSeries cached) {
+        if (cached != null && cached.getBarCount() > 0) {
+            // endTime − barDuration = start time of the last bar
+            return cached.getLastBar().getEndTime().minus(barDuration).toInstant().toEpochMilli();
+        }
+        return candlestickRepository.findTopByPairAndIntervalOrderByTimestampDesc(pair, intervalLabel)
+                .map(c -> c.getTimestamp().toInstant(ZoneOffset.UTC).toEpochMilli())
+                .orElse(0L);
+    }
+
+    /**
+     * Bulk upsert: one SELECT to find existing rows, one batched INSERT/UPDATE via saveAll.
+     * Replaces the previous find-then-save-per-candle loop (N+1 queries → 2 queries).
+     */
     private void persistCandles(List<CandleResponse> candles, String pair, String intervalLabel) {
+        if (candles.isEmpty()) {
+            return;
+        }
+
+        List<LocalDateTime> timestamps = candles.stream()
+                .map(c -> LocalDateTime.ofInstant(Instant.ofEpochMilli(c.start()), ZoneOffset.UTC))
+                .toList();
+
+        Map<LocalDateTime, Candlestick> existing = candlestickRepository
+                .findByPairAndIntervalAndTimestampIn(pair, intervalLabel, timestamps)
+                .stream()
+                .collect(Collectors.toMap(Candlestick::getTimestamp, Function.identity()));
+
+        List<Candlestick> toSave = new ArrayList<>(candles.size());
         int newCount = 0;
         for (CandleResponse candle : candles) {
-            // API returns 'start' (candle open time) in Unix epoch ms
             LocalDateTime timestamp = LocalDateTime.ofInstant(
                     Instant.ofEpochMilli(candle.start()), ZoneOffset.UTC);
-
-            Optional<Candlestick> existing = candlestickRepository
-                    .findByPairAndIntervalAndTimestamp(pair, intervalLabel, timestamp);
-
-            if (existing.isEmpty()) {
-                Candlestick entity = Candlestick.builder()
+            Candlestick entity = existing.get(timestamp);
+            if (entity == null) {
+                entity = Candlestick.builder()
                         .pair(pair)
                         .interval(intervalLabel)
                         .openPrice(candle.open())
@@ -178,50 +222,77 @@ public class MarketDataService {
                         .volume(candle.volume())
                         .timestamp(timestamp)
                         .build();
-                candlestickRepository.save(entity);
                 newCount++;
             } else {
-                // Update the latest (still-forming) candle
-                Candlestick entity = existing.get();
                 entity.setClosePrice(candle.close());
                 entity.setHighPrice(candle.high());
                 entity.setLowPrice(candle.low());
                 entity.setVolume(candle.volume());
-                candlestickRepository.save(entity);
             }
+            toSave.add(entity);
         }
-        log.debug("[{}][{}] Candle sync: {} new, {} updated", pair, intervalLabel, newCount, candles.size() - newCount);
+        candlestickRepository.saveAll(toSave);
+        log.debug("[{}][{}] Candle sync: {} new, {} updated", pair, intervalLabel,
+                newCount, candles.size() - newCount);
     }
 
-    private BarSeries buildBarSeries(String pair, String intervalLabel, Duration barDuration) {
-        List<Candlestick> candles = candlestickRepository
-                .findByPairAndIntervalOrderByTimestampAsc(pair, intervalLabel);
-        return buildBarSeriesFromCandles(pair + "_" + intervalLabel, candles, barDuration);
+    /**
+     * Appends each API candle to the cached series, or replaces the last bar when the
+     * candle's end time matches (the still-forming bar). API candles older than the
+     * current last bar are skipped (shouldn't happen — defensive).
+     */
+    private void appendOrReplaceBars(BarSeries series, List<CandleResponse> candles, Duration barDuration) {
+        for (CandleResponse candle : candles) {
+            Bar bar = toBar(candle, barDuration);
+
+            if (series.getBarCount() == 0) {
+                series.addBar(bar);
+                continue;
+            }
+            ZonedDateTime lastEndTime = series.getLastBar().getEndTime();
+            if (bar.getEndTime().isAfter(lastEndTime)) {
+                series.addBar(bar);
+            } else if (bar.getEndTime().isEqual(lastEndTime)) {
+                series.addBar(bar, true); // replace still-forming bar
+            }
+            // else: older than last cached bar — skip
+        }
     }
 
     private BarSeries buildBarSeriesFromDb(String pair, String intervalLabel, Duration barDuration) {
         List<Candlestick> candles = candlestickRepository
                 .findByPairAndIntervalOrderByTimestampAsc(pair, intervalLabel);
-        BarSeries series = buildBarSeriesFromCandles(pair + "_" + intervalLabel, candles, barDuration);
-        log.info("[{}][{}] BarSeries built from DB with {} bars", pair, intervalLabel, series.getBarCount());
+        BaseBarSeries series = new BaseBarSeries(pair + "_" + intervalLabel);
+        for (Candlestick c : candles) {
+            series.addBar(toBar(c, barDuration));
+        }
         return series;
     }
 
-    private BarSeries buildBarSeriesFromCandles(String seriesName, List<Candlestick> candles, Duration barDuration) {
-        BaseBarSeries series = new BaseBarSeries(seriesName);
-        for (Candlestick c : candles) {
-            ZonedDateTime endTime = c.getTimestamp().atZone(ZoneOffset.UTC).plus(barDuration);
-            Bar bar = BaseBar.builder()
-                    .timePeriod(barDuration)
-                    .endTime(endTime)
-                    .openPrice(DecimalNum.valueOf(c.getOpenPrice()))
-                    .highPrice(DecimalNum.valueOf(c.getHighPrice()))
-                    .lowPrice(DecimalNum.valueOf(c.getLowPrice()))
-                    .closePrice(DecimalNum.valueOf(c.getClosePrice()))
-                    .volume(DecimalNum.valueOf(c.getVolume()))
-                    .build();
-            series.addBar(bar);
-        }
-        return series;
+    private Bar toBar(Candlestick c, Duration barDuration) {
+        ZonedDateTime endTime = c.getTimestamp().atZone(ZoneOffset.UTC).plus(barDuration);
+        return BaseBar.builder()
+                .timePeriod(barDuration)
+                .endTime(endTime)
+                .openPrice(DecimalNum.valueOf(c.getOpenPrice()))
+                .highPrice(DecimalNum.valueOf(c.getHighPrice()))
+                .lowPrice(DecimalNum.valueOf(c.getLowPrice()))
+                .closePrice(DecimalNum.valueOf(c.getClosePrice()))
+                .volume(DecimalNum.valueOf(c.getVolume()))
+                .build();
+    }
+
+    private Bar toBar(CandleResponse candle, Duration barDuration) {
+        ZonedDateTime endTime = Instant.ofEpochMilli(candle.start())
+                .atZone(ZoneOffset.UTC).plus(barDuration);
+        return BaseBar.builder()
+                .timePeriod(barDuration)
+                .endTime(endTime)
+                .openPrice(DecimalNum.valueOf(candle.open()))
+                .highPrice(DecimalNum.valueOf(candle.high()))
+                .lowPrice(DecimalNum.valueOf(candle.low()))
+                .closePrice(DecimalNum.valueOf(candle.close()))
+                .volume(DecimalNum.valueOf(candle.volume()))
+                .build();
     }
 }

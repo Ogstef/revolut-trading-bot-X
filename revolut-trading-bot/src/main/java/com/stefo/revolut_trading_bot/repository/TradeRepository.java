@@ -110,4 +110,29 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
                                                         @Param("strategyName") StrategyType strategyName,
                                                         @Param("from") LocalDateTime from,
                                                         @Param("to") LocalDateTime to);
+
+    // ─── Aggregate queries — back the per-cycle risk snapshot (§3.3) ─────────
+
+    /**
+     * Sums PnL since a cutoff, grouped by (pair, interval, strategy) in a single query.
+     * Returns rows: [String pair, String interval, StrategyType strategyName, BigDecimal sum].
+     */
+    @Query("""
+            SELECT t.pair, t.interval, t.strategyName, COALESCE(SUM(t.pnl), 0)
+            FROM Trade t
+            WHERE t.executedAt >= :since
+            GROUP BY t.pair, t.interval, t.strategyName
+            """)
+    List<Object[]> sumPnlSinceGroupedByPairIntervalStrategy(@Param("since") LocalDateTime since);
+
+    /**
+     * Trades executed after a cutoff, newest first. Used to compute consecutive-loss streaks
+     * across all (pair, interval, strategy) keys in one query; the cycle builder groups in-memory.
+     */
+    @Query("""
+            SELECT t FROM Trade t
+            WHERE t.executedAt >= :since
+            ORDER BY t.executedAt DESC
+            """)
+    List<Trade> findByExecutedAtAfterOrderByExecutedAtDesc(@Param("since") LocalDateTime since);
 }

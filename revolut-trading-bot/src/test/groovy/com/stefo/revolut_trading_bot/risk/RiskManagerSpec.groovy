@@ -169,6 +169,78 @@ class RiskManagerSpec extends Specification {
         status.positionLimitReached()
     }
 
+    // ─── snapshotAll + statusFromSnapshot (per-cycle path) ──────────────────
+
+    def "snapshotAll fans out three aggregate queries into a per-key map"() {
+        given: "aggregate rows across two pairs, one interval, one strategy"
+        positionRepository.countByStatusGroupedByPairIntervalStrategy(OrderStatus.OPEN) >> [
+            (["BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, 2L] as Object[]),
+            (["ETH-EUR", "15m", StrategyType.EMA_CROSSOVER, 0L] as Object[])
+        ]
+        tradeRepository.sumPnlSinceGroupedByPairIntervalStrategy(_ as LocalDateTime) >> [
+            (["BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, BigDecimal.valueOf(-150)] as Object[]),
+            (["ETH-EUR", "15m", StrategyType.EMA_CROSSOVER, BigDecimal.valueOf(75)]   as Object[])
+        ]
+        tradeRepository.findByExecutedAtAfterOrderByExecutedAtDesc(_ as LocalDateTime) >> [
+            tradeFor("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, -10),
+            tradeFor("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, -5),
+            tradeFor("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, 20),    // streak breaker
+            tradeFor("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, -30),   // older, must not count
+            tradeFor("ETH-EUR", "15m", StrategyType.EMA_CROSSOVER, 15)
+        ]
+
+        when:
+        def snapshot = riskManager.snapshotAll()
+
+        then: "counts / sums land in the right bucket"
+        snapshot.openPositions()[new RiskManager.Key("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER)] == 2L
+        snapshot.openPositions()[new RiskManager.Key("ETH-EUR", "15m", StrategyType.EMA_CROSSOVER)] == 0L
+        snapshot.dailyPnls()[new RiskManager.Key("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER)]     == BigDecimal.valueOf(-150)
+        snapshot.dailyPnls()[new RiskManager.Key("ETH-EUR", "15m", StrategyType.EMA_CROSSOVER)]     == BigDecimal.valueOf(75)
+
+        and: "consecutive-loss streak stops at the first win for that key"
+        snapshot.consecutiveLosses()[new RiskManager.Key("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER)] == 2
+        !snapshot.consecutiveLosses().containsKey(new RiskManager.Key("ETH-EUR", "15m", StrategyType.EMA_CROSSOVER))
+    }
+
+    def "statusFromSnapshot derives circuit-breaker flags without touching the DB"() {
+        given: "a snapshot where BTC-EUR is over the daily loss limit"
+        def key = new RiskManager.Key("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER)
+        def snapshot = new RiskManager.CycleSnapshot(
+            [(key): 0L],
+            [(key): BigDecimal.valueOf(-600)],
+            [(key): 0]
+        )
+
+        when:
+        def status = riskManager.statusFromSnapshot(snapshot,
+                BigDecimal.valueOf(10_000), "BTC-EUR", "15m", StrategyType.EMA_CROSSOVER)
+
+        then:
+        status.dailyPnl() == BigDecimal.valueOf(-600)
+        status.dailyCircuitBreakerTripped()
+        status.anyCircuitBreakerTripped()
+
+        and: "no repository calls happen for status computation from snapshot"
+        0 * positionRepository._
+        0 * tradeRepository._
+    }
+
+    def "statusFromSnapshot returns zeros for unknown keys (no activity this cycle)"() {
+        given: "an empty snapshot — no trades, no positions"
+        def snapshot = new RiskManager.CycleSnapshot([:], [:], [:])
+
+        when:
+        def status = riskManager.statusFromSnapshot(snapshot,
+                BigDecimal.valueOf(10_000), "SOL-EUR", "1h", StrategyType.MACD)
+
+        then:
+        status.openPositions() == 0
+        status.dailyPnl() == BigDecimal.ZERO
+        status.consecutiveLosses() == 0
+        !status.anyCircuitBreakerTripped()
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────────
 
     private static TradingConfig buildConfig() {
@@ -206,6 +278,15 @@ class RiskManagerSpec extends Specification {
     private static Trade winningTrade() {
         def t = new Trade()
         t.pnl = BigDecimal.valueOf(100)
+        return t
+    }
+
+    private static Trade tradeFor(String pair, String interval, StrategyType strategy, long pnl) {
+        def t = new Trade()
+        t.pair = pair
+        t.interval = interval
+        t.strategyName = strategy
+        t.pnl = BigDecimal.valueOf(pnl)
         return t
     }
 }
