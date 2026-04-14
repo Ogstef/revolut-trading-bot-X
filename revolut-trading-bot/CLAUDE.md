@@ -1142,3 +1142,472 @@ Append:
 #### Milestone
 
 The dashboard shows a blended sentiment indicator (0–100) per pair with its F&G and Reddit components broken out, plus a 7-day history chart. Trading is untouched. After two to four weeks of accumulated snapshots, the UI can overlay sentiment onto trade PnL for visual correlation — providing the evidence base for a future "wire sentiment into risk / strategy" phase.
+
+---
+
+### Phase 13 — Fee & Slippage Modelling (Backend)
+
+**Goal:** Make paper-trading P&L realistic by subtracting the costs a live account would actually pay — taker fees and market-order slippage — and surface those costs in the API so strategy comparison reflects **net edge**, not fantasy-priced gross returns. After this phase the user can see:
+1. A **net P&L** per trade and per strategy (gross P&L minus fees minus slippage).
+2. **Total fees** and **total slippage** per strategy / pair / interval so fee-sensitive strategies stand out.
+3. A **fee drag** metric — `100 × (totalFees + totalSlippage) / |grossPnl|`. > 100 % means a "fee victim" (gross-positive, net-negative).
+4. A **paper balance** that reflects real growth instead of an overstated gross curve.
+
+**Zero changes** to strategy files, `SignalEngine`, `RiskManager`, `TradingLoop`, `OrderExecutionService`, or `TakeProfitStopLossManager` logic. Fees and slippage are an **execution-layer enrichment** — they enter at `PaperTradingService.openPosition / closePosition` and propagate through DTOs and stats.
+
+---
+
+#### Current state (verified)
+
+- `src/main/java/com/stefo/revolut_trading_bot/execution/PaperTradingService.java` — `calculatePnl()` is pure gross: `(exitPrice − entryPrice) × quantity`. No fee logic anywhere in the codebase.
+- `Position` entity — no fee / slippage columns.
+- `Trade` entity — has `pnl`, `pnlPct`; no fee / slippage / net columns.
+- `PortfolioService.getSnapshot()` — computes invested / unrealised from gross only.
+- `portfolio/TradingStats.java` — only gross metrics.
+
+---
+
+#### Design decisions (locked)
+
+- **Keep `trade.pnl` meaning as GROSS** (no breaking semantic change for existing consumers). Add `netPnl`, `netPnlPct`, `entryFee`, `exitFee`, `entrySlippage`, `exitSlippage` alongside.
+- **Fee model behind an interface** (`FeeModel`). First impl: `FlatPercentFeeModel`. Future (tiered, per-order-type) plug in without touching callers.
+- **Slippage model behind an interface** (`SlippageModel`). First impl: `FixedBpsSlippageModel`. It nudges the fill price against you and the euro-denominated cost is persisted separately so it's visible.
+- **Defaults in config** — `taker-pct: 0.09` (Revolut X taker on BTC/ETH), `slippage.bps: 8`. Per-pair overrides supported (SOL-EUR is less liquid — default override `0.12 %` fee, `15 bps` slippage).
+- **Backfill historical closed trades** in the V7 migration at the current default rate — approximation, documented. Lets the UI show net history from day one.
+- **TP / SL levels are NOT adjusted for fees.** Entry/exit still triggers at the raw % band — fees simply shave net at close. User widens `take-profit-pct` / `stop-loss-pct` manually if desired.
+- **Balance math:** `availableBalance = startingBalance + Σ netPnl(closed) − Σ (entryCost + entryFee + entrySlippage)` for open positions.
+
+---
+
+#### Step 1 — Flyway migration V7
+
+File: `src/main/resources/db/migration/V7__add_fees_and_slippage.sql`
+
+```sql
+ALTER TABLE trading.positions
+    ADD COLUMN entry_fee      DECIMAL(18,8) NOT NULL DEFAULT 0,
+    ADD COLUMN entry_slippage DECIMAL(18,8) NOT NULL DEFAULT 0;
+
+ALTER TABLE trading.trades
+    ADD COLUMN entry_fee      DECIMAL(18,8) NOT NULL DEFAULT 0,
+    ADD COLUMN exit_fee       DECIMAL(18,8) NOT NULL DEFAULT 0,
+    ADD COLUMN entry_slippage DECIMAL(18,8) NOT NULL DEFAULT 0,
+    ADD COLUMN exit_slippage  DECIMAL(18,8) NOT NULL DEFAULT 0,
+    ADD COLUMN net_pnl        DECIMAL(18,8),
+    ADD COLUMN net_pnl_pct    DECIMAL(18,8);
+
+-- Backfill historical closed trades at current default rates (0.09% fee + 0.08% slippage each side).
+-- Approximation — pre-Phase-13 trades did not actually pay these costs. Documented as such.
+UPDATE trading.trades
+SET entry_fee      = ROUND(entry_price * quantity * 0.0009, 8),
+    exit_fee       = ROUND(exit_price  * quantity * 0.0009, 8),
+    entry_slippage = ROUND(entry_price * quantity * 0.0008, 8),
+    exit_slippage  = ROUND(exit_price  * quantity * 0.0008, 8)
+WHERE exit_price IS NOT NULL
+  AND entry_fee = 0;
+
+UPDATE trading.trades
+SET net_pnl     = pnl - entry_fee - exit_fee - entry_slippage - exit_slippage,
+    net_pnl_pct = CASE
+        WHEN entry_price * quantity = 0 THEN 0
+        ELSE ROUND(
+            (pnl - entry_fee - exit_fee - entry_slippage - exit_slippage)
+            / (entry_price * quantity) * 100, 4)
+    END
+WHERE exit_price IS NOT NULL;
+
+CREATE INDEX idx_trades_net_pnl ON trading.trades (strategy_name, pair, interval, net_pnl);
+```
+
+---
+
+#### Step 2 — Entity additions
+
+**`model/entity/Position.java`:**
+
+```java
+@Column(name = "entry_fee",      nullable = false, precision = 18, scale = 8)
+@Builder.Default private BigDecimal entryFee      = BigDecimal.ZERO;
+
+@Column(name = "entry_slippage", nullable = false, precision = 18, scale = 8)
+@Builder.Default private BigDecimal entrySlippage = BigDecimal.ZERO;
+```
+
+**`model/entity/Trade.java`:**
+
+```java
+@Column(name = "entry_fee",      nullable = false) @Builder.Default private BigDecimal entryFee      = BigDecimal.ZERO;
+@Column(name = "exit_fee",       nullable = false) @Builder.Default private BigDecimal exitFee       = BigDecimal.ZERO;
+@Column(name = "entry_slippage", nullable = false) @Builder.Default private BigDecimal entrySlippage = BigDecimal.ZERO;
+@Column(name = "exit_slippage",  nullable = false) @Builder.Default private BigDecimal exitSlippage  = BigDecimal.ZERO;
+@Column(name = "net_pnl")                                           private BigDecimal netPnl;
+@Column(name = "net_pnl_pct")                                       private BigDecimal netPnlPct;
+```
+
+Existing `pnl` / `pnlPct` unchanged (still gross).
+
+---
+
+#### Step 3 — Cost model interfaces + impls
+
+New package: `com.stefo.revolut_trading_bot.execution.cost`.
+
+```java
+public interface FeeModel {
+    /** EUR fee charged on the fill. Always >= 0. */
+    BigDecimal computeFee(String pair, OrderSide side, BigDecimal fillPrice, BigDecimal quantity);
+}
+
+public interface SlippageModel {
+    /** Actual fill price the market would give (worse than reference). */
+    BigDecimal applyBuy (String pair, BigDecimal referencePrice);
+    BigDecimal applySell(String pair, BigDecimal referencePrice);
+}
+
+public enum FeeModelType      { FLAT_PERCENT }
+public enum SlippageModelType { FIXED_BPS }
+```
+
+```java
+@Component @RequiredArgsConstructor
+public class FlatPercentFeeModel implements FeeModel {
+    private final FeeConfig cfg;
+    @Override
+    public BigDecimal computeFee(String pair, OrderSide side, BigDecimal price, BigDecimal qty) {
+        BigDecimal rate = cfg.takerPctFor(pair);        // 0.09 → 0.0009
+        return price.multiply(qty).multiply(rate).setScale(8, RoundingMode.HALF_UP).abs();
+    }
+}
+
+@Component @RequiredArgsConstructor
+public class FixedBpsSlippageModel implements SlippageModel {
+    private final SlippageConfig cfg;
+    @Override public BigDecimal applyBuy (String pair, BigDecimal ref) { return shift(pair, ref, +1); }
+    @Override public BigDecimal applySell(String pair, BigDecimal ref) { return shift(pair, ref, -1); }
+    private BigDecimal shift(String pair, BigDecimal ref, int sign) {
+        if (!cfg.isEnabled()) return ref;
+        BigDecimal frac = BigDecimal.valueOf(cfg.bpsFor(pair))
+                .divide(BigDecimal.valueOf(10_000), 10, RoundingMode.HALF_UP);
+        return ref.multiply(BigDecimal.ONE.add(frac.multiply(BigDecimal.valueOf(sign))))
+                  .setScale(8, RoundingMode.HALF_UP);
+    }
+}
+```
+
+---
+
+#### Step 4 — Config classes + yml
+
+**`config/FeeConfig.java`** (`@ConfigurationProperties("trading.fees")`):
+
+```java
+@Data @Validated
+public class FeeConfig {
+    @NotNull private FeeModelType model = FeeModelType.FLAT_PERCENT;
+    @PositiveOrZero private BigDecimal takerPct = new BigDecimal("0.09");
+    @PositiveOrZero private BigDecimal makerPct = BigDecimal.ZERO;
+    private boolean assumeAllTaker = true;
+    private Map<String, BigDecimal> perPairOverrides = Map.of();
+
+    public BigDecimal takerPctFor(String pair) {
+        BigDecimal raw = perPairOverrides.getOrDefault(pair, takerPct);
+        return raw.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP);  // 0.09 → 0.0009
+    }
+}
+```
+
+**`config/SlippageConfig.java`** (`@ConfigurationProperties("trading.slippage")`):
+
+```java
+@Data @Validated
+public class SlippageConfig {
+    private boolean enabled = true;
+    @NotNull private SlippageModelType model = SlippageModelType.FIXED_BPS;
+    @PositiveOrZero private int bps = 8;
+    private Map<String, Integer> perPairOverrides = Map.of();
+    public int bpsFor(String pair) { return perPairOverrides.getOrDefault(pair, bps); }
+}
+```
+
+Register both with `@EnableConfigurationProperties` on the application class (same pattern as `TradingConfig`).
+
+**`application.yml` addition:**
+
+```yaml
+trading:
+  fees:
+    model: FLAT_PERCENT
+    taker-pct: 0.09
+    maker-pct: 0.00
+    assume-all-taker: true
+    per-pair-overrides:
+      SOL-EUR: 0.12
+  slippage:
+    enabled: true
+    model: FIXED_BPS
+    bps: 8
+    per-pair-overrides:
+      SOL-EUR: 15
+```
+
+---
+
+#### Step 5 — `PaperTradingService` — integration
+
+Inject `FeeModel` and `SlippageModel` via the existing `@RequiredArgsConstructor`.
+
+**`openPosition` — replace the body:**
+
+```java
+OrderSide side = signal.type().name().equals("BUY") ? OrderSide.BUY : OrderSide.SELL;
+
+BigDecimal fillPrice = side == OrderSide.BUY
+        ? slippageModel.applyBuy(signal.pair(), currentPrice)
+        : slippageModel.applySell(signal.pair(), currentPrice);
+
+BigDecimal quantity     = positionSizeEur.divide(fillPrice, 8, RoundingMode.HALF_UP);
+BigDecimal entryFee     = feeModel.computeFee(signal.pair(), side, fillPrice, quantity);
+BigDecimal entrySlippage = fillPrice.subtract(currentPrice).multiply(quantity).abs()
+                              .setScale(8, RoundingMode.HALF_UP);
+
+BigDecimal takeProfit = tpslManager.calculateTakeProfit(fillPrice);
+BigDecimal stopLoss   = tpslManager.calculateStopLoss(fillPrice);
+
+Position position = Position.builder()
+        .pair(signal.pair()).interval(signal.interval()).side(side)
+        .entryPrice(fillPrice)                        // realistic fill, NOT the reference price
+        .quantity(quantity)
+        .takeProfit(takeProfit).stopLoss(stopLoss)
+        .status(OrderStatus.OPEN)
+        .strategyName(signal.strategyType()).signalReason(signal.reason())
+        .entryFee(entryFee).entrySlippage(entrySlippage)
+        .build();
+positionRepository.save(position);
+
+Trade trade = Trade.builder()
+        .position(position).pair(signal.pair()).interval(signal.interval()).side(side)
+        .entryPrice(fillPrice).quantity(quantity)
+        .strategyName(signal.strategyType()).tradingMode(TradingMode.PAPER)
+        .entryFee(entryFee).entrySlippage(entrySlippage)
+        .build();
+tradeRepository.save(trade);
+
+log.info("[PAPER] Opened {} pos id={} fill={} qty={} entryFee={} entrySlip={} tp={} sl={}",
+        side, position.getId(), fillPrice, quantity, entryFee, entrySlippage, takeProfit, stopLoss);
+alertService.positionOpened(position);
+return position;
+```
+
+**`closePosition` — replace the body:**
+
+```java
+Trade trade = tradeRepository.findOpenTradeByPosition(position)
+        .orElseThrow(() -> new IllegalStateException("No open trade for position id=" + position.getId()));
+
+OrderSide closingSide = position.getSide() == OrderSide.BUY ? OrderSide.SELL : OrderSide.BUY;
+BigDecimal fillPrice = closingSide == OrderSide.SELL
+        ? slippageModel.applySell(position.getPair(), currentPrice)
+        : slippageModel.applyBuy(position.getPair(),  currentPrice);
+
+BigDecimal exitSlippage = currentPrice.subtract(fillPrice).multiply(position.getQuantity()).abs()
+                              .setScale(8, RoundingMode.HALF_UP);
+BigDecimal exitFee      = feeModel.computeFee(position.getPair(), closingSide, fillPrice, position.getQuantity());
+
+BigDecimal grossPnl = calculatePnl(position, fillPrice);
+BigDecimal grossPct = calculatePnlPct(position, grossPnl);
+BigDecimal netPnl   = grossPnl
+        .subtract(position.getEntryFee())
+        .subtract(exitFee)
+        .subtract(position.getEntrySlippage())
+        .subtract(exitSlippage);
+BigDecimal netPct   = calculatePnlPct(position, netPnl);
+
+trade.setExitPrice(fillPrice);
+trade.setPnl(grossPnl);   trade.setPnlPct(grossPct);    // gross — unchanged semantics
+trade.setNetPnl(netPnl);  trade.setNetPnlPct(netPct);
+trade.setExitFee(exitFee);
+trade.setExitSlippage(exitSlippage);
+trade.setExitReason(exitReason);
+trade.setClosedAt(LocalDateTime.now());
+tradeRepository.save(trade);
+
+position.setStatus(OrderStatus.CLOSED);
+position.setClosedAt(LocalDateTime.now());
+positionRepository.save(position);
+
+log.info("[PAPER] Closed {} pos id={} fill={} gross={} fees={} slip={} net={} reason={}",
+        position.getSide(), position.getId(), fillPrice, grossPnl,
+        position.getEntryFee().add(exitFee),
+        position.getEntrySlippage().add(exitSlippage),
+        netPnl, exitReason);
+alertService.positionClosed(position, trade);
+return trade;
+```
+
+`calculatePnl` / `calculatePnlPct` helpers remain untouched — they now receive the fill price.
+
+---
+
+#### Step 6 — `PortfolioService` — balance truth
+
+`getSnapshot()` already sums invested for open positions. Inside the open-position loop, also accumulate:
+
+```java
+BigDecimal openCost = p.getEntryFee().add(p.getEntrySlippage());
+totalOpenCost = totalOpenCost.add(openCost);
+```
+
+Add `totalOpenCost` and `totalFeesPaidAllTime` fields to `PortfolioSnapshot`. `StrategyService` subtracts these when reporting per-strategy `availableBalance` in `/api/strategies/{name}/stats`.
+
+---
+
+#### Step 7 — `TradingStats` DTO + repo aggregations
+
+**`portfolio/TradingStats.java`:**
+
+```java
+public record TradingStats(
+    // existing
+    int totalTrades, int winningTrades, int losingTrades,
+    BigDecimal winRate, BigDecimal totalPnl, BigDecimal averageWin,
+    BigDecimal averageLoss, BigDecimal bestTrade, BigDecimal worstTrade,
+    BigDecimal expectancy,
+    // new
+    BigDecimal grossPnl,          // alias of totalPnl for clarity
+    BigDecimal netPnl,
+    BigDecimal totalFees,
+    BigDecimal totalSlippage,
+    BigDecimal feeDragPct,        // 100 × (totalFees + totalSlippage) / |grossPnl|, 0 if gross = 0
+    BigDecimal netExpectancy      // (winRate/100 × avgNetWin) − ((1 − winRate/100) × avgNetLoss)
+) {}
+```
+
+**`TradeRepository`** — add three aggregation queries filtered on `strategy_name + pair + interval + exit_price IS NOT NULL`:
+
+```java
+BigDecimal sumFees     (StrategyType name, String pair, String interval);
+BigDecimal sumSlippage (StrategyType name, String pair, String interval);
+BigDecimal sumNetPnl   (StrategyType name, String pair, String interval);
+```
+
+Also add `List<Trade> findClosedForNetStats(...)` (or reuse the existing method returning closed trades) so `StrategyService.calculateStats` can compute `avgNetWin`, `avgNetLoss`, `netExpectancy` in-memory.
+
+---
+
+#### Step 8 — New `/fees` endpoint + extend `/pnl`
+
+**`DashboardController`:**
+
+```java
+@GetMapping("/strategies/{name}/fees")
+public FeeSummaryDto fees(
+        @PathVariable StrategyType name,
+        @RequestParam(required = false) String pair,
+        @RequestParam(required = false) String interval) {
+    return strategyService.feeSummary(name, resolvePair(pair), resolveInterval(interval));
+}
+```
+
+**DTO:**
+
+```java
+public record FeeSummaryDto(
+    BigDecimal totalFees,
+    BigDecimal totalSlippage,
+    BigDecimal avgFeePerTrade,    // (totalFees + totalSlippage) / tradeCount
+    BigDecimal feePctOfNotional,  // 100 × (totalFees + totalSlippage) / Σ (entryPrice × quantity)
+    int tradeCount
+) {}
+```
+
+**Extend `GET /api/strategies/{name}/pnl`** — each period returns `{ gross, net }`:
+
+```json
+{
+  "daily":   { "gross":  8.20, "net":  7.82 },
+  "weekly":  { "gross": 38.20, "net": 36.45 },
+  "monthly": { "gross":142.80, "net":135.90 },
+  "allTime": { "gross":142.80, "net":135.90 }
+}
+```
+
+Introduce `PnlBreakdownValue(BigDecimal gross, BigDecimal net)` record. `PnlBreakdownDto` switches each of its four fields from `BigDecimal` to `PnlBreakdownValue`. This **is** a breaking JSON-shape change on `/pnl` — document it in `API_CONTRACT.md` and update the frontend in the same PR (see frontend Phase 13).
+
+---
+
+#### Step 9 — `API_CONTRACT.md` update (same PR)
+
+In `../API_CONTRACT.md`:
+
+- **`Trade` DTO:** add `entryFee, exitFee, entrySlippage, exitSlippage, netPnl, netPnlPct` (`BigDecimal`, null for open trades).
+- **`Position` DTO:** add `entryFee, entrySlippage`.
+- **`TradingStats` DTO:** add `grossPnl, netPnl, totalFees, totalSlippage, feeDragPct, netExpectancy`.
+- **`PnlBreakdown` DTO:** each period now `{ gross, net }` (breaking change).
+- **New endpoint:** `GET /api/strategies/{name}/fees?pair=&interval=` → `FeeSummaryDto`.
+- **New DTO:** `FeeSummaryDto { totalFees, totalSlippage, avgFeePerTrade, feePctOfNotional, tradeCount }`.
+
+---
+
+#### Step 10 — Tests (Spock)
+
+Under `src/test/groovy/com/stefo/revolut_trading_bot/execution/cost/` and `/execution/`:
+
+- `FlatPercentFeeModelSpec` — rate × notional; per-pair override beats default; side-independent; zero quantity → zero fee.
+- `FixedBpsSlippageModelSpec` — BUY fills above reference, SELL fills below; disabled returns reference unchanged; per-pair override applied.
+- `PaperTradingServiceFeeSpec` — open + close flow:
+  - `entryFee` + `entrySlippage` persisted on `Position` and `Trade`.
+  - On close: `exitFee` + `exitSlippage` persisted; `netPnl = grossPnl − entryFee − exitFee − entrySlippage − exitSlippage`.
+  - `entryPrice` on the persisted Trade = `fillPrice`, not the reference price.
+  - `pnl` stays gross.
+- `StrategyServiceStatsFeeSpec` — `feeDragPct`, `netExpectancy`, `totalFees`, `totalSlippage` correct; zero-trade edge case returns zeros without NaN; gross-positive / net-negative case produces `feeDragPct > 100`.
+- `V7MigrationSpec` (optional, Testcontainers) — backfill leaves existing `pnl` untouched, populates `net_pnl`, ignores open trades.
+
+---
+
+#### Explicit non-goals
+
+- No funding / deposit / withdrawal fees.
+- No tiered fees based on 30-day volume (future phase).
+- No maker/taker routing — `assume-all-taker: true` is hard-locked.
+- No adjustment to `takeProfitPct` / `stopLossPct` — fees shave net; user widens TP/SL manually.
+- No changes to strategy files, `SignalEngine`, `RiskManager`, `TradingLoop`, `OrderExecutionService`, `TakeProfitStopLossManager`.
+- No live-trading fee handling — when `LiveTradingService` is built, it reads fees from the Revolut order-fill response, not from `FeeModel`.
+- Phase 12 sentiment layer unaffected.
+
+---
+
+#### Verification checklist
+
+1. **Migration:** `V7__add_fees_and_slippage` in Flyway log; columns exist on both tables; `idx_trades_net_pnl` present. All historical closed trades have non-zero `entry_fee`, `exit_fee`, `entry_slippage`, `exit_slippage`, `net_pnl`.
+2. **Backfill sanity:** `SELECT id, pnl, net_pnl, entry_fee + exit_fee AS fees FROM trading.trades WHERE exit_price IS NOT NULL LIMIT 5;` — net ≈ gross − fees − slippage; sign preserved on both.
+3. **New trade:** wait for a paper trade to close; all four cost columns and `net_pnl` populated from live config.
+4. **Fill price:** `entry_price` on the new trade is slightly above reference for BUY (slippage) and slightly below for SELL — compare against ticker at signal time.
+5. **Stats endpoint:** `curl '.../api/strategies/EMA_CROSSOVER/stats?pair=BTC-EUR&interval=15m'` returns all six new fields populated.
+6. **Fees endpoint:** `curl '.../api/strategies/EMA_CROSSOVER/fees?pair=BTC-EUR&interval=15m'` — numbers match `SUM(entry_fee + exit_fee)` in SQL.
+7. **Pnl endpoint:** every period has `{ gross, net }`; `net <= gross` for every period with winning trades.
+8. **Isolation:** 12 strategies still produce signals every 30 s; `signal_logs` rows unchanged; `RiskManager` validation unchanged (same log lines).
+9. **Tests:** `mvn test` — new Spock specs pass; existing tests unaffected.
+10. **Log sanity:** `[PAPER] Opened` + `[PAPER] Closed` lines now include the four cost numbers and `net=`.
+
+---
+
+#### Implementation order (smallest blast radius first)
+
+1. V7 migration (schema + backfill).
+2. `FeeConfig`, `SlippageConfig`, enum types, `application.yml` block.
+3. `FeeModel` / `SlippageModel` interfaces + `FlatPercentFeeModel` + `FixedBpsSlippageModel`.
+4. `Position` + `Trade` entity column additions.
+5. `PaperTradingService` integration (open + close).
+6. `PortfolioService.getSnapshot` updates.
+7. Repository sum methods (`sumFees`, `sumSlippage`, `sumNetPnl`).
+8. `TradingStats` extension + `StrategyService.calculateStats`.
+9. `FeeSummaryDto` + `/fees` endpoint.
+10. Extend `/pnl` with `{ gross, net }` per period.
+11. `API_CONTRACT.md` update.
+12. Spock tests.
+
+---
+
+#### Milestone
+
+Every closed paper trade carries four cost components (entry/exit fee + entry/exit slippage) and a `netPnl`. The `/stats` endpoint exposes `netPnl`, `totalFees`, `totalSlippage`, `feeDragPct`, and `netExpectancy`. The `/fees` endpoint aggregates per strategy. The `/pnl` endpoint returns both gross and net per period. Strategy comparison now reflects **net edge**, which is the only number that matters for the LIVE migration decision.
