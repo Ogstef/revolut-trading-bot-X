@@ -15,9 +15,11 @@ import com.stefo.revolut_trading_bot.service.*;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -228,6 +230,38 @@ public class DashboardController {
         return ResponseEntity.ok(
                 tradeRepository.findRecentTradesByPairAndIntervalAndStrategy(
                         effectivePair, effectiveInterval, strategyType, limit));
+    }
+
+    /**
+     * Full trade history for a single (pair, interval, strategy) virtual portfolio,
+     * enriched with the entry signal reason, TP/SL targets, opening timestamp,
+     * holding duration, and R-multiple.
+     *
+     * Optional {@code from} / {@code to} ISO-8601 timestamps narrow the result by
+     * trade execution time. Returns newest first; no pagination — datasets per
+     * (pair, interval, strategy) are bounded.
+     *
+     * GET /api/strategies/{strategyType}/history?pair=BTC-EUR&interval=15m
+     *     &from=2026-01-01T00:00:00&to=2026-04-14T23:59:59
+     */
+    @GetMapping("/strategies/{strategyType}/history")
+    public ResponseEntity<List<TradeHistoryEntry>> strategyHistory(
+            @PathVariable StrategyType strategyType,
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
+        String effectivePair     = pair != null ? pair : tradingConfig.primaryPair();
+        String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
+        List<TradeHistoryEntry> history = tradeRepository
+                .findHistoryByPairAndIntervalAndStrategy(
+                        effectivePair, effectiveInterval, strategyType, from, to)
+                .stream()
+                .map(TradeHistoryEntry::from)
+                .toList();
+        return ResponseEntity.ok(history);
     }
 
     /**

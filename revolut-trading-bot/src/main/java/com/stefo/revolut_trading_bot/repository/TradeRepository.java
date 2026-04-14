@@ -84,4 +84,30 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
             String pair, String interval, StrategyType strategyName);
 
     List<Trade> findByPairAndIntervalOrderByExecutedAtDesc(String pair, String interval);
+
+    /**
+     * Full trade history for a (pair, interval, strategy) virtual portfolio with optional
+     * date-range bounds. Fetch-joins the parent Position so the response can be enriched
+     * with signalReason / TP / SL / openedAt without N+1 lazy loads.
+     *
+     * Either or both of {@code from} / {@code to} may be null (no lower / upper bound).
+     * The {@code CAST(:param AS LocalDateTime)} wrappers are required so Postgres can
+     * determine the JDBC parameter type when the value is null — without them the driver
+     * raises {@code ERROR: could not determine data type of parameter $N} (SQLState 42P18).
+     */
+    @Query("""
+            SELECT t FROM Trade t
+            LEFT JOIN FETCH t.position p
+            WHERE t.pair = :pair
+              AND t.interval = :interval
+              AND t.strategyName = :strategyName
+              AND (CAST(:from AS LocalDateTime) IS NULL OR t.executedAt >= :from)
+              AND (CAST(:to   AS LocalDateTime) IS NULL OR t.executedAt <= :to)
+            ORDER BY t.executedAt DESC
+            """)
+    List<Trade> findHistoryByPairAndIntervalAndStrategy(@Param("pair") String pair,
+                                                        @Param("interval") String interval,
+                                                        @Param("strategyName") StrategyType strategyName,
+                                                        @Param("from") LocalDateTime from,
+                                                        @Param("to") LocalDateTime to);
 }
