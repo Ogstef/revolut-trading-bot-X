@@ -786,6 +786,7 @@ Verify with `GET /api/strategies` — all 12 strategy names should appear after 
 **API changes:**
 - All endpoints that accept `?pair=` now also accept `?interval=` (optional, defaults to primary interval)
 - New endpoint: `GET /api/intervals` returns configured intervals
+- New endpoint: `GET /api/signals/current?pair=&interval=` returns the latest `SignalLog` per configured `(pair, interval, strategy)` triple, null-filled when no signal has been logged yet. Backed by `SignalService.getCurrentSignals(pair, interval)`.
 
 ```
 GET /api/intervals

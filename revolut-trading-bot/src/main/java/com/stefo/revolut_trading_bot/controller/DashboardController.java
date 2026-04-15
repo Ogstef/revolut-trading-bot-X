@@ -313,6 +313,18 @@ public class DashboardController {
         return ResponseEntity.ok(signalService.getSummary(pair, interval));
     }
 
+    /**
+     * Most recent signal per (pair, interval, strategy) triple — one row for every
+     * configured triple, null-filled when no signal has been logged yet.
+     * GET /api/signals/current?pair=BTC-EUR&interval=15m
+     */
+    @GetMapping("/signals/current")
+    public ResponseEntity<List<CurrentSignal>> currentSignals(
+            @RequestParam(required = false) String pair,
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(signalService.getCurrentSignals(pair, interval));
+    }
+
     // ─── Market sentiment ─────────────────────────────────────────────────────
 
     /**

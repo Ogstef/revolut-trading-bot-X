@@ -66,4 +66,13 @@ public interface SignalLogRepository extends JpaRepository<SignalLog, Long> {
     @Query("SELECT s.strategyName, s.signalType, COUNT(s) FROM SignalLog s WHERE s.pair = :pair AND s.interval = :interval GROUP BY s.strategyName, s.signalType")
     List<Object[]> countSignalsByStrategyAndInterval(@Param("pair") String pair,
                                                       @Param("interval") String interval);
+
+    @Query(value = """
+            SELECT DISTINCT ON (pair, interval, strategy_name) *
+            FROM trading.signal_logs
+            WHERE (CAST(:pair AS text) IS NULL OR pair = CAST(:pair AS text))
+              AND (CAST(:interval AS text) IS NULL OR interval = CAST(:interval AS text))
+            ORDER BY pair, interval, strategy_name, created_at DESC
+            """, nativeQuery = true)
+    List<SignalLog> findLatestPerTriple(@Param("pair") String pair, @Param("interval") String interval);
 }

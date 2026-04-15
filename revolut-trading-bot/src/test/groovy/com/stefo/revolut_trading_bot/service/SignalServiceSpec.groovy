@@ -5,6 +5,7 @@ import com.stefo.revolut_trading_bot.model.entity.SignalLog
 import com.stefo.revolut_trading_bot.model.enums.SignalType
 import com.stefo.revolut_trading_bot.model.enums.StrategyType
 import com.stefo.revolut_trading_bot.repository.SignalLogRepository
+import com.stefo.revolut_trading_bot.strategy.SignalEngine
 import spock.lang.Specification
 import spock.lang.Subject
 
@@ -15,9 +16,10 @@ class SignalServiceSpec extends Specification {
 
     SignalLogRepository repository = Mock()
     TradingConfig       config     = buildConfig()
+    SignalEngine signalEngine = Mock()
 
     @Subject
-    SignalService service = new SignalService(repository, config)
+    SignalService service = new SignalService(repository, config, signalEngine)
 
     // ─── getSummary ───────────────────────────────────────────────────────────
 
