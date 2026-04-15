@@ -10,9 +10,10 @@ import java.math.BigDecimal
 class ConfigServiceSpec extends Specification {
 
     TradingConfig tradingConfig = buildConfig()
+    BotEventService botEventService = Mock()
 
     @Subject
-    ConfigService service = new ConfigService(tradingConfig)
+    ConfigService service = new ConfigService(tradingConfig, botEventService)
 
     def "UpdateConfigs applies all provided fields"() {
         given:

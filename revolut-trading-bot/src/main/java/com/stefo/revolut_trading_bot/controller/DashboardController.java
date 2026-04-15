@@ -4,8 +4,10 @@ import com.stefo.revolut_trading_bot.alert.AlertService;
 import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.model.dto.*;
 import com.stefo.revolut_trading_bot.service.FearGreedService;
+import com.stefo.revolut_trading_bot.model.entity.BotEvent;
 import com.stefo.revolut_trading_bot.model.entity.SignalLog;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
+import com.stefo.revolut_trading_bot.model.enums.BotEventType;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.portfolio.TradingStats;
 import com.stefo.revolut_trading_bot.portfolio.TradeService;
@@ -23,6 +25,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Monitoring and control REST API for the running bot.
@@ -47,6 +50,8 @@ public class DashboardController {
     private final StrategyService strategyService;
     private final SignalService signalService;
     private final FearGreedService fearGreedService;
+    private final StatsAggregationService statsAggregationService;
+    private final BotEventService botEventService;
 
     // ─── Status ───────────────────────────────────────────────────────────────
 
@@ -70,6 +75,16 @@ public class DashboardController {
     public ResponseEntity<List<PositionView>> positions(
             @RequestParam(required = false) String pair) {
         return ResponseEntity.ok(positionService.getPositions(pair));
+    }
+
+    /**
+     * Every OPEN position across every pair, interval, and strategy — enriched with
+     * live price, unrealised PnL, interval, strategyName, and displayName.
+     * GET /api/positions/live
+     */
+    @GetMapping("/positions/live")
+    public ResponseEntity<List<PositionView>> livePositions() {
+        return ResponseEntity.ok(positionService.getAllLiveViews());
     }
 
     // ─── Trades ───────────────────────────────────────────────────────────────
@@ -323,6 +338,34 @@ public class DashboardController {
             @RequestParam(required = false) String pair,
             @RequestParam(required = false) String interval) {
         return ResponseEntity.ok(signalService.getCurrentSignals(pair, interval));
+    }
+
+    // ─── Stats aggregation ────────────────────────────────────────────────────
+
+    /**
+     * Grand Leaderboard — one TripleStats row per configured (pair, interval, strategy).
+     * Empty triples (no trades yet) are zero-filled. Total rows = pairs × intervals × strategies.
+     * GET /api/stats/all-triples
+     */
+    @GetMapping("/stats/all-triples")
+    public ResponseEntity<List<TripleStats>> allTripleStats() {
+        return ResponseEntity.ok(statsAggregationService.getAllTripleStats());
+    }
+
+    // ─── Activity feed ────────────────────────────────────────────────────────
+
+    /**
+     * Reverse-chronological audit trail — position opens/closes, circuit-breaker
+     * transitions, emergency stop/resume, and config changes.
+     * GET /api/activity?limit=100&types=POSITION_OPENED,CIRCUIT_BREAKER_TRIPPED
+     */
+    @GetMapping("/activity")
+    public ResponseEntity<List<BotEvent>> activity(
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestParam(required = false) List<BotEventType> types) {
+        return ResponseEntity.ok(
+            botEventService.recent(limit, types == null ? null : Set.copyOf(types))
+        );
     }
 
     // ─── Market sentiment ─────────────────────────────────────────────────────

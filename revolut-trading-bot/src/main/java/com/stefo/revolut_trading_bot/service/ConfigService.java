@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 public class ConfigService {
 
     private final TradingConfig tradingConfig;
+    private final BotEventService botEventService;
 
 
     public void UpdateConfigs (ConfigUpdateRequest req) {
@@ -32,5 +33,6 @@ public class ConfigService {
 
         if (req.paperBalance() != null)    tradingConfig.setPaperBalance(req.paperBalance());
 
+        botEventService.recordConfigChanged(req.toString());
     }
 }

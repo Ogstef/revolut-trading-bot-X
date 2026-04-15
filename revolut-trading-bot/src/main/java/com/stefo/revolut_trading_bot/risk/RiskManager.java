@@ -6,6 +6,7 @@ import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
+import com.stefo.revolut_trading_bot.service.BotEventService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,6 +19,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Guards all trade attempts against the configured risk rules.
@@ -39,6 +41,13 @@ public class RiskManager {
     private final PositionRepository positionRepository;
     private final TradeRepository    tradeRepository;
     private final TradingConfig      config;
+    private final BotEventService    botEventService;
+
+    private final ConcurrentHashMap<String, Boolean> breakerState = new ConcurrentHashMap<>();
+
+    private static String triplKey(String pair, String interval, StrategyType strategy) {
+        return pair + "|" + interval + "|" + (strategy == null ? "null" : strategy.name());
+    }
 
     /**
      * Validates whether a new trade is allowed.
@@ -241,6 +250,21 @@ public class RiskManager {
         boolean dailyLimitBreached       = dailyPnl.compareTo(maxDailyLoss) < 0;
         boolean consecutiveLimitBreached = consecutive >= risk.getMaxConsecutiveLosses();
         boolean positionLimitBreached    = openPositions >= risk.getMaxConcurrentPositions();
+
+        boolean currentlyTripped = dailyLimitBreached || consecutiveLimitBreached;
+        String transitionKey = triplKey(pair, interval, strategyType);
+        Boolean prev = breakerState.put(transitionKey, currentlyTripped);
+        if (prev == null || prev != currentlyTripped) {
+            if (currentlyTripped) {
+                String cause = dailyLimitBreached
+                        ? String.format("Daily loss limit breached — dailyPnl=%s limit=%s", dailyPnl, maxDailyLoss)
+                        : String.format("Consecutive loss limit breached — consecutiveLosses=%d limit=%d",
+                                consecutive, risk.getMaxConsecutiveLosses());
+                botEventService.recordCircuitBreakerTripped(pair, interval, strategyType, cause);
+            } else if (prev != null) {
+                botEventService.recordCircuitBreakerReset(pair, interval, strategyType);
+            }
+        }
 
         return new RiskStatus(openPositions, dailyPnl, consecutive,
                 dailyLimitBreached, consecutiveLimitBreached, positionLimitBreached);

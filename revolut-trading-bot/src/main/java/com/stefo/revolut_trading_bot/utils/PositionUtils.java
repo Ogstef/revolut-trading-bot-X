@@ -31,7 +31,10 @@ public class PositionUtils {
                 p.getEntryPrice(), p.getQuantity(),
                 p.getTakeProfit(), p.getStopLoss(),
                 currentPrice, unrealisedPnl, unrealisedPnlPct,
-                p.getSignalReason(), p.getOpenedAt()
+                p.getSignalReason(), p.getOpenedAt(),
+                p.getInterval(),
+                p.getStrategyName().name(),
+                p.getStrategyName().getDisplayName()
         );
     }
 

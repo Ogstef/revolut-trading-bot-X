@@ -12,6 +12,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.stefo.revolut_trading_bot.utils.PositionUtils.toPositionView;
 
@@ -37,14 +40,18 @@ public class PositionService {
     }
 
     private List<PositionView> getViews(List<Position> positions) {
+        Set<String> distinctPairs = positions.stream().map(Position::getPair).collect(Collectors.toSet());
+        Map<String, BigDecimal> priceByPair = distinctPairs.stream()
+                .collect(Collectors.toMap(p -> p, marketDataService::getCurrentPriceForPair));
         return positions.stream()
-                .map(p -> {
-                    BigDecimal price = marketDataService.getCurrentPriceForPair(p.getPair());
-                            return toPositionView(p,price);})
+                .map(p -> toPositionView(p, priceByPair.get(p.getPair())))
                 .toList();
     }
 
-
+    public List<PositionView> getAllLiveViews() {
+        List<Position> positions = repository.findByStatus(OrderStatus.OPEN);
+        return getViews(positions);
+    }
 
     public List<Position> getPairs(String pair) {
         return pair != null ? repository.findByPairAndStatus(pair, OrderStatus.OPEN)

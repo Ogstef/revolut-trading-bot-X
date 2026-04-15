@@ -788,6 +788,11 @@ Verify with `GET /api/strategies` — all 12 strategy names should appear after 
 - New endpoint: `GET /api/intervals` returns configured intervals
 - New endpoint: `GET /api/signals/current?pair=&interval=` returns the latest `SignalLog` per configured `(pair, interval, strategy)` triple, null-filled when no signal has been logged yet. Backed by `SignalService.getCurrentSignals(pair, interval)`.
 
+### Tier 1 observability (Positions / Leaderboard / Activity)
+- New endpoint: `GET /api/positions/live` — every OPEN position across all triples, enriched with `interval`, `strategyName`, `displayName`. Backed by `PositionService.getAllLiveViews()`. `PositionView` DTO gained three new fields.
+- New endpoint: `GET /api/stats/all-triples` — one `TripleStats` row per configured `(pair, interval, strategy)` triple (180 rows). Backed by `StatsAggregationService`, which combines a `GROUP BY (pair, interval, strategy_name)` aggregate on `trading.trades` with the existing open-position rollup.
+- New endpoint: `GET /api/activity?limit=&types=` — reverse-chronological `BotEvent[]` audit trail persisted in new table `trading.bot_events` (Flyway `V6`). Event types: `POSITION_OPENED`, `POSITION_CLOSED`, `CIRCUIT_BREAKER_TRIPPED`, `CIRCUIT_BREAKER_RESET`, `BOT_STOPPED`, `BOT_RESUMED`, `CONFIG_CHANGED`. Persistence is wired at source via `BotEventService` calls from `AlertService`, `RiskManager` (transition-detection via a `breakerState` ConcurrentHashMap inside `statusFromSnapshot`), and `ConfigService`. Writes are fire-and-forget — they never fail the caller.
+
 ```
 GET /api/intervals
 [

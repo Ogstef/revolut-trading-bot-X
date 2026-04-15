@@ -2,6 +2,8 @@ package com.stefo.revolut_trading_bot.alert;
 
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
+import com.stefo.revolut_trading_bot.service.BotEventService;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -17,7 +19,10 @@ import java.math.BigDecimal;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class AlertService {
+
+    private final BotEventService botEventService;
 
     // ─── Trade lifecycle ──────────────────────────────────────────────────────
 
@@ -27,6 +32,7 @@ public class AlertService {
                 position.getEntryPrice(), position.getQuantity(),
                 position.getTakeProfit(), position.getStopLoss(),
                 position.getId());
+        botEventService.recordPositionOpened(position, position.getSignalReason());
     }
 
     public void positionClosed(Position position, Trade trade) {
@@ -35,6 +41,7 @@ public class AlertService {
                 trade.getEntryPrice(), trade.getExitPrice(),
                 trade.getPnl(), trade.getPnlPct(),
                 trade.getExitReason(), position.getId());
+        botEventService.recordPositionClosed(trade);
     }
 
     // ─── Circuit breakers ─────────────────────────────────────────────────────
@@ -47,10 +54,12 @@ public class AlertService {
 
     public void botStopped(String triggeredBy) {
         log.warn("[BOT STOP] Emergency stop triggered by={}", triggeredBy);
+        botEventService.recordBotStopped(triggeredBy);
     }
 
     public void botResumed(String triggeredBy) {
         log.info("[BOT RESUME] Trading resumed by={}", triggeredBy);
+        botEventService.recordBotResumed(triggeredBy);
     }
 
     // ─── Risk events ──────────────────────────────────────────────────────────

@@ -135,4 +135,40 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
             ORDER BY t.executedAt DESC
             """)
     List<Trade> findByExecutedAtAfterOrderByExecutedAtDesc(@Param("since") LocalDateTime since);
+
+    /**
+     * Aggregates closed-trade stats grouped by (pair, interval, strategy) in a single query —
+     * backs the Grand Leaderboard endpoint (Tab 2). Returns one row per triple that has at
+     * least one closed trade.
+     *
+     * Row layout:
+     *   [0] String        pair
+     *   [1] String        interval
+     *   [2] StrategyType  strategyName
+     *   [3] Long          totalTrades
+     *   [4] Long          winningTrades
+     *   [5] Long          losingTrades
+     *   [6] BigDecimal    totalPnl
+     *   [7] BigDecimal    averageWin    (avg of pnl > 0, 0 when no winners)
+     *   [8] BigDecimal    averageLoss   (avg of pnl <= 0, 0 when no losers)
+     *   [9] BigDecimal    bestTrade
+     *  [10] BigDecimal    worstTrade
+     */
+    @Query("""
+            SELECT t.pair,
+                   t.interval,
+                   t.strategyName,
+                   COUNT(t),
+                   SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN t.pnl <= 0 THEN 1 ELSE 0 END),
+                   COALESCE(SUM(t.pnl), 0),
+                   COALESCE(AVG(CASE WHEN t.pnl > 0  THEN t.pnl END), 0),
+                   COALESCE(AVG(CASE WHEN t.pnl <= 0 THEN t.pnl END), 0),
+                   COALESCE(MAX(t.pnl), 0),
+                   COALESCE(MIN(t.pnl), 0)
+            FROM Trade t
+            WHERE t.closedAt IS NOT NULL AND t.pnl IS NOT NULL
+            GROUP BY t.pair, t.interval, t.strategyName
+            """)
+    List<Object[]> aggregateStatsByTriple();
 }

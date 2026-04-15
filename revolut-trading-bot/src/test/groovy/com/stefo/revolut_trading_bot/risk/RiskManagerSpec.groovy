@@ -6,6 +6,7 @@ import com.stefo.revolut_trading_bot.model.enums.OrderStatus
 import com.stefo.revolut_trading_bot.model.enums.StrategyType
 import com.stefo.revolut_trading_bot.repository.PositionRepository
 import com.stefo.revolut_trading_bot.repository.TradeRepository
+import com.stefo.revolut_trading_bot.service.BotEventService
 import spock.lang.Specification
 import spock.lang.Subject
 
@@ -17,9 +18,10 @@ class RiskManagerSpec extends Specification {
     PositionRepository positionRepository = Mock()
     TradeRepository    tradeRepository    = Mock()
     TradingConfig      config             = buildConfig()
+    BotEventService    botEventService    = Mock()
 
     @Subject
-    RiskManager riskManager = new RiskManager(positionRepository, tradeRepository, config)
+    RiskManager riskManager = new RiskManager(positionRepository, tradeRepository, config, botEventService)
 
     // ─── validateForStrategy ─────────────────────────────────────────────────
 

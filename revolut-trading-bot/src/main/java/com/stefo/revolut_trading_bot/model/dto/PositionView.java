@@ -21,5 +21,8 @@ public record PositionView(
         BigDecimal unrealisedPnl,
         BigDecimal unrealisedPnlPct,
         String signalReason,
-        LocalDateTime openedAt
+        LocalDateTime openedAt,
+        String interval,
+        String strategyName,
+        String displayName
 ) {}
