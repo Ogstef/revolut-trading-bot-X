@@ -27,7 +27,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Rules (all checked in order — first violation rejects the trade):
  *   1. Max concurrent open positions (default 3)
  *   2. Daily loss circuit breaker — stops if today's PnL < -maxDailyLossPct% of balance
- *   3. Consecutive loss circuit breaker — stops after N back-to-back losing trades
+ *   3. Consecutive loss circuit breaker — stops after N back-to-back losing trades TODAY
+ *      (resets at midnight — no strategy is ever permanently dead)
  *
  * From Phase 8, circuit breakers are scoped per (pair, strategy) so a bad run on
  * BTC-EUR does not block the same strategy on ETH-EUR.
@@ -202,9 +203,9 @@ public class RiskManager {
             dailyPnls.put(keyOf(row), (BigDecimal) row[3]);
         }
 
-        // Query 3: recent trades (bounded window) → consecutive-loss streaks in memory
+        // Query 3: today's trades → consecutive-loss streaks in memory (resets daily)
         int maxStreak = config.getRisk().getMaxConsecutiveLosses();
-        LocalDateTime streakWindowStart = startOfDay.minusDays(CONSECUTIVE_LOSS_WINDOW_DAYS);
+        LocalDateTime streakWindowStart = startOfDay;
         Map<Key, Integer> consecutiveLosses = new HashMap<>();
         Map<Key, Boolean> streakClosed = new HashMap<>();
         for (Trade trade : tradeRepository.findByExecutedAtAfterOrderByExecutedAtDesc(streakWindowStart)) {
@@ -270,9 +271,6 @@ public class RiskManager {
                 dailyLimitBreached, consecutiveLimitBreached, positionLimitBreached);
     }
 
-    /** How far back to look when computing consecutive-loss streaks in the per-cycle snapshot. */
-    private static final int CONSECUTIVE_LOSS_WINDOW_DAYS = 30;
-
     private static Key keyOf(Object[] row) {
         return new Key((String) row[0], (String) row[1], (StrategyType) row[2]);
     }
@@ -281,11 +279,16 @@ public class RiskManager {
 
     private int countConsecutiveLosses(String pair, String interval, StrategyType strategyType) {
         int limit = config.getRisk().getMaxConsecutiveLosses();
+        LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
         List<Trade> recent = tradeRepository
                 .findRecentTradesByPairAndIntervalAndStrategy(pair, interval, strategyType, limit);
 
         int count = 0;
         for (Trade trade : recent) {
+            // Daily reset: ignore trades from before today
+            if (trade.getExecutedAt() != null && trade.getExecutedAt().isBefore(startOfDay)) {
+                break;
+            }
             if (trade.getPnl() != null && trade.getPnl().compareTo(BigDecimal.ZERO) < 0) {
                 count++;
             } else {

@@ -94,8 +94,8 @@ trading:
   risk:
     max-position-pct: 2.0
     max-concurrent-positions: 1
-    max-daily-loss-pct: 5.0
-    max-consecutive-losses: 5
+    max-daily-loss-pct: 10.0
+    max-consecutive-losses: 15
     take-profit-pct: 5.0
     stop-loss-pct: 3.0
 
