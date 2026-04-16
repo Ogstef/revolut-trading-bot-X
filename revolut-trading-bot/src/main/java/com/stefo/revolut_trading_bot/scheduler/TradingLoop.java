@@ -59,6 +59,7 @@ public class TradingLoop {
             runCycle();
         } catch (Exception e) {
             log.error("Trading cycle failed — resuming on next tick", e);
+            alertService.tradingCycleFailed(e);
         }
     }
 

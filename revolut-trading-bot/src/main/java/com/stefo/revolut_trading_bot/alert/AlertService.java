@@ -1,5 +1,6 @@
 package com.stefo.revolut_trading_bot.alert;
 
+import com.stefo.revolut_trading_bot.config.TelegramConfig;
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
 import com.stefo.revolut_trading_bot.service.BotEventService;
@@ -13,7 +14,7 @@ import java.math.BigDecimal;
  * Publishes structured trading events.
  *
  * V1: SLF4J structured log messages — searchable in the log file.
- * V2: Add Telegram webhook by injecting a TelegramClient here.
+ * V2: Telegram notifications via TelegramClient (fire-and-forget).
  *
  * All methods are fire-and-forget — never throw.
  */
@@ -23,6 +24,9 @@ import java.math.BigDecimal;
 public class AlertService {
 
     private final BotEventService botEventService;
+    private final TelegramClient telegramClient;
+    private final TelegramMessageFormatter telegramFormatter;
+    private final TelegramConfig telegramConfig;
 
     // ─── Trade lifecycle ──────────────────────────────────────────────────────
 
@@ -33,6 +37,9 @@ public class AlertService {
                 position.getTakeProfit(), position.getStopLoss(),
                 position.getId());
         botEventService.recordPositionOpened(position, position.getSignalReason());
+        if (telegramConfig.isSendTradeNotifications()) {
+            telegramClient.sendMessage(telegramFormatter.formatPositionOpened(position));
+        }
     }
 
     public void positionClosed(Position position, Trade trade) {
@@ -42,12 +49,18 @@ public class AlertService {
                 trade.getPnl(), trade.getPnlPct(),
                 trade.getExitReason(), position.getId());
         botEventService.recordPositionClosed(trade);
+        if (telegramConfig.isSendTradeNotifications()) {
+            telegramClient.sendMessage(telegramFormatter.formatPositionClosed(position, trade));
+        }
     }
 
     // ─── Circuit breakers ─────────────────────────────────────────────────────
 
     public void circuitBreakerTripped(String reason) {
         log.warn("[CIRCUIT BREAKER] Trading halted — {}", reason);
+        if (telegramConfig.isSendErrorNotifications()) {
+            telegramClient.sendMessage(telegramFormatter.formatCircuitBreakerTripped(reason));
+        }
     }
 
     // ─── Bot lifecycle ────────────────────────────────────────────────────────
@@ -55,11 +68,24 @@ public class AlertService {
     public void botStopped(String triggeredBy) {
         log.warn("[BOT STOP] Emergency stop triggered by={}", triggeredBy);
         botEventService.recordBotStopped(triggeredBy);
+        if (telegramConfig.isSendErrorNotifications()) {
+            telegramClient.sendMessage(telegramFormatter.formatBotStopped(triggeredBy));
+        }
     }
 
     public void botResumed(String triggeredBy) {
         log.info("[BOT RESUME] Trading resumed by={}", triggeredBy);
         botEventService.recordBotResumed(triggeredBy);
+        telegramClient.sendMessage(telegramFormatter.formatBotResumed(triggeredBy));
+    }
+
+    // ─── Trading cycle errors ─────────────────────────────────────────────────
+
+    public void tradingCycleFailed(Exception e) {
+        log.error("[CYCLE FAIL] {}", e.getMessage());
+        if (telegramConfig.isSendErrorNotifications()) {
+            telegramClient.sendMessage(telegramFormatter.formatTradingCycleError(e.getMessage()));
+        }
     }
 
     // ─── Risk events ──────────────────────────────────────────────────────────

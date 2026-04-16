@@ -13,9 +13,11 @@ import com.stefo.revolut_trading_bot.repository.TradeRepository
 import com.stefo.revolut_trading_bot.scheduler.BotStateService
 import com.stefo.revolut_trading_bot.service.BotStatusService
 import com.stefo.revolut_trading_bot.service.ConfigService
+import com.stefo.revolut_trading_bot.service.BotEventService
 import com.stefo.revolut_trading_bot.service.FearGreedService
 import com.stefo.revolut_trading_bot.service.PositionService
 import com.stefo.revolut_trading_bot.service.SignalService
+import com.stefo.revolut_trading_bot.service.StatsAggregationService
 import com.stefo.revolut_trading_bot.service.StrategyService
 import org.springframework.http.HttpStatus
 import spock.lang.Specification
@@ -33,23 +35,26 @@ import java.time.Instant
  */
 class DashboardControllerSpec extends Specification {
 
-    BotStateService   botStateService   = Mock()
-    TradingConfig     tradingConfig     = Stub()
-    TradeService      tradeService      = Mock()
-    TradeRepository   tradeRepository   = Mock()
-    AlertService      alertService      = Mock()
-    BotStatusService  botStatusService  = Mock()
-    PositionService   positionService   = Mock()
-    ConfigService     configService     = Mock()
-    StrategyService   strategyService   = Mock()
-    SignalService     signalService     = Mock()
-    FearGreedService fearGreedService     = Mock()
+    BotStateService          botStateService          = Mock()
+    TradingConfig            tradingConfig            = Stub()
+    TradeService             tradeService             = Mock()
+    TradeRepository          tradeRepository          = Mock()
+    AlertService             alertService             = Mock()
+    BotStatusService         botStatusService         = Mock()
+    PositionService          positionService          = Mock()
+    ConfigService            configService            = Mock()
+    StrategyService          strategyService          = Mock()
+    SignalService            signalService            = Mock()
+    FearGreedService         fearGreedService         = Mock()
+    StatsAggregationService  statsAggregationService  = Mock()
+    BotEventService          botEventService          = Mock()
 
     @Subject
     DashboardController controller = new DashboardController(
             botStateService, tradingConfig, tradeService, tradeRepository,
             alertService, botStatusService, positionService, configService,
-            strategyService, signalService, fearGreedService)
+            strategyService, signalService, fearGreedService,
+            statsAggregationService, botEventService)
 
     def setup() {
         tradingConfig.primaryPair()     >> "BTC-EUR"

@@ -137,6 +137,14 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
     List<Trade> findByExecutedAtAfterOrderByExecutedAtDesc(@Param("since") LocalDateTime since);
 
     /**
+     * Returns all trades closed since the given timestamp with a finalized PnL,
+     * ordered by PnL descending (winners first, losers last).
+     * Used by the daily summary scheduler.
+     */
+    @Query("SELECT t FROM Trade t WHERE t.closedAt >= :since AND t.pnl IS NOT NULL ORDER BY t.pnl DESC")
+    List<Trade> findClosedTradesSince(@Param("since") LocalDateTime since);
+
+    /**
      * Aggregates closed-trade stats grouped by (pair, interval, strategy) in a single query —
      * backs the Grand Leaderboard endpoint (Tab 2). Returns one row per triple that has at
      * least one closed trade.
