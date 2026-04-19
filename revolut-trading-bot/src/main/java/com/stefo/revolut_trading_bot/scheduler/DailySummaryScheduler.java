@@ -78,8 +78,19 @@ public class DailySummaryScheduler {
                 .multiply(BigDecimal.valueOf(100))
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // PnL breakdown (uses existing service)
+        // PnL breakdown (gross + net via existing service)
         PnlBreakdown pnl = tradeService.getPnlBreakdown();
+
+        // Fee aggregates for trades closed today
+        BigDecimal dailyFees = closedToday.stream()
+                .map(t -> safe(t.getEntryFee()).add(safe(t.getExitFee())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        BigDecimal dailySlippage = closedToday.stream()
+                .map(t -> safe(t.getEntrySlippage()).add(safe(t.getExitSlippage())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
 
         // Open positions
         int openPositions = (int) positionRepository.countByStatus(OrderStatus.OPEN);
@@ -87,14 +98,14 @@ public class DailySummaryScheduler {
         // Circuit breakers — use snapshotAll (3 DB queries) then check each triple in-memory
         int cbActive = countActiveCircuitBreakers();
 
-        // Top winners (already sorted PnL DESC by the query)
+        // Top winners by gross PnL (already sorted DESC by the query)
         List<DailySummaryData.TopMover> topWinners = closedToday.stream()
                 .filter(t -> t.getPnl().signum() > 0)
                 .limit(3)
                 .map(this::toMover)
                 .toList();
 
-        // Top losers (worst first)
+        // Top losers by gross PnL (worst first)
         List<DailySummaryData.TopMover> topLosers = closedToday.stream()
                 .filter(t -> t.getPnl().signum() <= 0)
                 .sorted(Comparator.comparing(Trade::getPnl))
@@ -111,12 +122,21 @@ public class DailySummaryScheduler {
                 pnl.daily(),
                 pnl.weekly(),
                 pnl.allTime(),
+                pnl.dailyNet(),
+                pnl.weeklyNet(),
+                pnl.allTimeNet(),
+                dailyFees,
+                dailySlippage,
                 openPositions,
                 cbActive,
                 topWinners,
                 topLosers,
                 tradingConfig.getMode()
         );
+    }
+
+    private static BigDecimal safe(BigDecimal v) {
+        return v != null ? v : BigDecimal.ZERO;
     }
 
     private int countActiveCircuitBreakers() {
@@ -152,7 +172,8 @@ public class DailySummaryScheduler {
                 t.getPair(),
                 t.getStrategyName().name(),
                 t.getInterval(),
-                t.getPnl().setScale(2, RoundingMode.HALF_UP)
+                t.getPnl().setScale(2, RoundingMode.HALF_UP),
+                safe(t.getNetPnl()).setScale(2, RoundingMode.HALF_UP)
         );
     }
 }

@@ -18,5 +18,9 @@ public record TripleStats(
         BigDecimal worstTrade,
         BigDecimal expectancy,
         int openPositions,
-        boolean circuitBreakerActive
+        boolean circuitBreakerActive,
+        BigDecimal netPnl,
+        BigDecimal totalCosts,
+        BigDecimal feeDragPct,
+        BigDecimal netExpectancy
 ) {}

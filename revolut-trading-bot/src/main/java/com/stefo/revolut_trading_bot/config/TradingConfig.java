@@ -59,6 +59,10 @@ public class TradingConfig {
     @NotNull
     private Risk risk = new Risk();
 
+    @Valid
+    @NotNull
+    private Costs costs = new Costs();
+
     /**
      * The first configured pair — used by legacy single-pair endpoints (/api/status, /api/trades, etc.)
      * and as a fallback when no pair context is available.
@@ -154,6 +158,15 @@ public class TradingConfig {
 
         @Positive
         private int rsiOversold;
+    }
+
+    @Data
+    public static class Costs {
+        @NotNull
+        private BigDecimal feeRate = BigDecimal.ZERO;
+
+        @NotNull
+        private BigDecimal slippageRate = BigDecimal.ZERO;
     }
 
     @Data

@@ -63,12 +63,13 @@ public class TradeService {
         BigDecimal best  = closed.stream().map(Trade::getPnl).max(Comparator.naturalOrder()).orElse(BigDecimal.ZERO);
         BigDecimal worst = closed.stream().map(Trade::getPnl).min(Comparator.naturalOrder()).orElse(BigDecimal.ZERO);
 
-        // Expectancy: average profit per trade (positive = profitable strategy)
         BigDecimal winRateFrac  = winRate.divide(BigDecimal.valueOf(100), 8, RoundingMode.HALF_UP);
         BigDecimal lossRateFrac = BigDecimal.ONE.subtract(winRateFrac);
         BigDecimal expectancy   = winRateFrac.multiply(avgWin)
                 .add(lossRateFrac.multiply(avgLoss))
                 .setScale(4, RoundingMode.HALF_UP);
+
+        FeeNetStats feeNet = computeFeeNetStats(closed, winRateFrac, lossRateFrac);
 
         log.debug("Stats — total={} wins={} losses={} winRate={}% pnl={} expectancy={}",
                 closed.size(), winners.size(), losers.size(), winRate, totalPnl, expectancy);
@@ -80,7 +81,9 @@ public class TradeService {
                 avgLoss.setScale(2, RoundingMode.HALF_UP),
                 best.setScale(2, RoundingMode.HALF_UP),
                 worst.setScale(2, RoundingMode.HALF_UP),
-                expectancy
+                expectancy,
+                feeNet.netPnl(), feeNet.totalFees(), feeNet.totalSlippage(),
+                feeNet.feeDragPct(), feeNet.netExpectancy()
         );
     }
 
@@ -92,16 +95,27 @@ public class TradeService {
         LocalDateTime startOfWeek  = LocalDate.now().with(java.time.DayOfWeek.MONDAY).atStartOfDay();
         LocalDateTime startOfMonth = LocalDate.now().withDayOfMonth(1).atStartOfDay();
 
+        LocalDateTime epoch = LocalDateTime.of(2000, 1, 1, 0, 0);
+
         BigDecimal daily   = tradeRepository.sumPnlSince(startOfDay);
         BigDecimal weekly  = tradeRepository.sumPnlSince(startOfWeek);
         BigDecimal monthly = tradeRepository.sumPnlSince(startOfMonth);
-        BigDecimal allTime = tradeRepository.sumPnlSince(LocalDateTime.of(2000, 1, 1, 0, 0));
+        BigDecimal allTime = tradeRepository.sumPnlSince(epoch);
+
+        BigDecimal dailyNet   = tradeRepository.sumNetPnlSince(startOfDay);
+        BigDecimal weeklyNet  = tradeRepository.sumNetPnlSince(startOfWeek);
+        BigDecimal monthlyNet = tradeRepository.sumNetPnlSince(startOfMonth);
+        BigDecimal allTimeNet = tradeRepository.sumNetPnlSince(epoch);
 
         return new PnlBreakdown(
                 daily.setScale(2, RoundingMode.HALF_UP),
                 weekly.setScale(2, RoundingMode.HALF_UP),
                 monthly.setScale(2, RoundingMode.HALF_UP),
-                allTime.setScale(2, RoundingMode.HALF_UP)
+                allTime.setScale(2, RoundingMode.HALF_UP),
+                dailyNet.setScale(2, RoundingMode.HALF_UP),
+                weeklyNet.setScale(2, RoundingMode.HALF_UP),
+                monthlyNet.setScale(2, RoundingMode.HALF_UP),
+                allTimeNet.setScale(2, RoundingMode.HALF_UP)
         );
     }
 
@@ -150,6 +164,8 @@ public class TradeService {
                 .add(lossRateFrac.multiply(avgLoss))
                 .setScale(4, RoundingMode.HALF_UP);
 
+        FeeNetStats feeNet = computeFeeNetStats(closed, winRateFrac, lossRateFrac);
+
         return new TradingStats(
                 closed.size(), winners.size(), losers.size(),
                 winRate, totalPnl.setScale(2, RoundingMode.HALF_UP),
@@ -157,7 +173,9 @@ public class TradeService {
                 avgLoss.setScale(2, RoundingMode.HALF_UP),
                 best.setScale(2, RoundingMode.HALF_UP),
                 worst.setScale(2, RoundingMode.HALF_UP),
-                expectancy
+                expectancy,
+                feeNet.netPnl(), feeNet.totalFees(), feeNet.totalSlippage(),
+                feeNet.feeDragPct(), feeNet.netExpectancy()
         );
     }
 
@@ -185,11 +203,20 @@ public class TradeService {
         BigDecimal monthly = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
         BigDecimal allTime = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
 
+        BigDecimal dailyNet   = tradeRepository.sumNetPnlSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
+        BigDecimal weeklyNet  = tradeRepository.sumNetPnlSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
+        BigDecimal monthlyNet = tradeRepository.sumNetPnlSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
+        BigDecimal allTimeNet = tradeRepository.sumNetPnlSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
+
         return new PnlBreakdown(
                 daily.setScale(2, RoundingMode.HALF_UP),
                 weekly.setScale(2, RoundingMode.HALF_UP),
                 monthly.setScale(2, RoundingMode.HALF_UP),
-                allTime.setScale(2, RoundingMode.HALF_UP)
+                allTime.setScale(2, RoundingMode.HALF_UP),
+                dailyNet.setScale(2, RoundingMode.HALF_UP),
+                weeklyNet.setScale(2, RoundingMode.HALF_UP),
+                monthlyNet.setScale(2, RoundingMode.HALF_UP),
+                allTimeNet.setScale(2, RoundingMode.HALF_UP)
         );
     }
 
@@ -205,9 +232,55 @@ public class TradeService {
         return sum(trades).divide(BigDecimal.valueOf(trades.size()), 8, RoundingMode.HALF_UP);
     }
 
+    private BigDecimal effectiveNet(Trade t) {
+        return t.getNetPnl() != null ? t.getNetPnl() : t.getPnl();
+    }
+
+    private FeeNetStats computeFeeNetStats(List<Trade> closed, BigDecimal winRateFrac, BigDecimal lossRateFrac) {
+        BigDecimal totalNetPnl   = closed.stream().map(this::effectiveNet).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalFees     = closed.stream().map(t -> t.getEntryFee().add(t.getExitFee())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalSlippage = closed.stream().map(t -> t.getEntrySlippage().add(t.getExitSlippage())).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal totalCosts    = totalFees.add(totalSlippage);
+
+        List<Trade> netWinners = closed.stream().filter(t -> effectiveNet(t).compareTo(BigDecimal.ZERO) > 0).toList();
+        List<Trade> netLosers  = closed.stream().filter(t -> effectiveNet(t).compareTo(BigDecimal.ZERO) <= 0).toList();
+        BigDecimal avgNetWin  = netWinners.isEmpty() ? BigDecimal.ZERO
+                : netWinners.stream().map(this::effectiveNet).reduce(BigDecimal.ZERO, BigDecimal::add)
+                             .divide(BigDecimal.valueOf(netWinners.size()), 8, RoundingMode.HALF_UP);
+        BigDecimal avgNetLoss = netLosers.isEmpty()  ? BigDecimal.ZERO
+                : netLosers.stream().map(this::effectiveNet).reduce(BigDecimal.ZERO, BigDecimal::add)
+                             .divide(BigDecimal.valueOf(netLosers.size()), 8, RoundingMode.HALF_UP);
+
+        BigDecimal grossPnl  = closed.stream().map(Trade::getPnl).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal feeDragPct = grossPnl.abs().compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.ZERO
+                : totalCosts.divide(grossPnl.abs(), 4, RoundingMode.HALF_UP)
+                             .multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP);
+
+        BigDecimal netExpectancy = winRateFrac.multiply(avgNetWin)
+                .add(lossRateFrac.multiply(avgNetLoss))
+                .setScale(4, RoundingMode.HALF_UP);
+
+        return new FeeNetStats(
+                totalNetPnl.setScale(2, RoundingMode.HALF_UP),
+                totalFees.setScale(2, RoundingMode.HALF_UP),
+                totalSlippage.setScale(2, RoundingMode.HALF_UP),
+                feeDragPct,
+                netExpectancy
+        );
+    }
+
     private TradingStats emptyStats() {
         return new TradingStats(0, 0, 0,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
     }
+
+    private record FeeNetStats(
+            BigDecimal netPnl,
+            BigDecimal totalFees,
+            BigDecimal totalSlippage,
+            BigDecimal feeDragPct,
+            BigDecimal netExpectancy
+    ) {}
 }

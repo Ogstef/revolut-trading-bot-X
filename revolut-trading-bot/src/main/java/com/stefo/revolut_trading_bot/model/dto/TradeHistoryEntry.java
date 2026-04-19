@@ -41,7 +41,14 @@ public record TradeHistoryEntry(
         LocalDateTime openedAt,
         // ── derived analytics ──
         Long holdingDurationSeconds,
-        BigDecimal rMultiple
+        BigDecimal rMultiple,
+        // ── cost fields ──
+        BigDecimal entryFee,
+        BigDecimal exitFee,
+        BigDecimal entrySlippage,
+        BigDecimal exitSlippage,
+        BigDecimal netPnl,
+        BigDecimal netPnlPct
 ) {
 
     public static TradeHistoryEntry from(Trade trade) {
@@ -80,7 +87,13 @@ public record TradeHistoryEntry(
                 stopLoss,
                 openedAt,
                 holdingDurationSeconds,
-                rMultiple
+                rMultiple,
+                trade.getEntryFee(),
+                trade.getExitFee(),
+                trade.getEntrySlippage(),
+                trade.getExitSlippage(),
+                trade.getNetPnl(),
+                trade.getNetPnlPct()
         );
     }
 

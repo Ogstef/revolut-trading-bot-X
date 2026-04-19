@@ -44,7 +44,11 @@ public class StatsAggregationService {
                     toBd(row[7]),
                     toBd(row[8]),
                     toBd(row[9]),
-                    toBd(row[10])
+                    toBd(row[10]),
+                    toBd(row[11]),
+                    toBd(row[12]),
+                    toBd(row[13]),
+                    toBd(row[14])
             ));
         }
 
@@ -81,9 +85,13 @@ public class StatsAggregationService {
 
                     BigDecimal winRate;
                     BigDecimal expectancy;
+                    BigDecimal netExpectancy;
+                    BigDecimal feeDragPct;
                     if (agg.totalTrades == 0) {
                         winRate = BigDecimal.ZERO;
                         expectancy = BigDecimal.ZERO;
+                        netExpectancy = BigDecimal.ZERO;
+                        feeDragPct = BigDecimal.ZERO;
                     } else {
                         winRate = BigDecimal.valueOf(agg.winningTrades)
                                 .divide(BigDecimal.valueOf(agg.totalTrades), 8, RoundingMode.HALF_UP)
@@ -94,6 +102,12 @@ public class StatsAggregationService {
                         expectancy = winRateFrac.multiply(agg.averageWin)
                                 .add(lossRateFrac.multiply(agg.averageLoss))
                                 .setScale(4, RoundingMode.HALF_UP);
+                        netExpectancy = winRateFrac.multiply(agg.averageNetWin)
+                                .add(lossRateFrac.multiply(agg.averageNetLoss))
+                                .setScale(4, RoundingMode.HALF_UP);
+                        feeDragPct = agg.totalPnl.abs().compareTo(BigDecimal.ZERO) == 0 ? BigDecimal.ZERO
+                                : agg.totalCosts.divide(agg.totalPnl.abs(), 4, RoundingMode.HALF_UP)
+                                               .multiply(BigDecimal.valueOf(100)).setScale(2, RoundingMode.HALF_UP);
                     }
 
                     result.add(new TripleStats(
@@ -112,7 +126,11 @@ public class StatsAggregationService {
                             agg.worstTrade.setScale(2, RoundingMode.HALF_UP),
                             expectancy,
                             openPositions,
-                            cbActive
+                            cbActive,
+                            agg.totalNetPnl.setScale(2, RoundingMode.HALF_UP),
+                            agg.totalCosts.setScale(2, RoundingMode.HALF_UP),
+                            feeDragPct,
+                            netExpectancy
                     ));
                 }
             }
@@ -144,12 +162,17 @@ public class StatsAggregationService {
             BigDecimal averageWin,
             BigDecimal averageLoss,
             BigDecimal bestTrade,
-            BigDecimal worstTrade
+            BigDecimal worstTrade,
+            BigDecimal totalNetPnl,
+            BigDecimal totalCosts,
+            BigDecimal averageNetWin,
+            BigDecimal averageNetLoss
     ) {
         static TradeAgg empty() {
             return new TradeAgg(0, 0, 0,
                     BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                    BigDecimal.ZERO, BigDecimal.ZERO);
+                    BigDecimal.ZERO, BigDecimal.ZERO,
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
         }
     }
 }

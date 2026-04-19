@@ -3,14 +3,17 @@ package com.stefo.revolut_trading_bot.service;
 import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.market.MarketDataService;
 import com.stefo.revolut_trading_bot.model.dto.PositionView;
+import com.stefo.revolut_trading_bot.model.dto.TradeHistoryEntry;
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
 import com.stefo.revolut_trading_bot.strategy.SignalEngine;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +29,7 @@ public class StrategyService {
     private final RiskManager riskManager;
     private final MarketDataService marketDataService;
     private final PositionService positionService;
+    private final TradeRepository tradeRepository;
 
 
     public List<Map<String, Object>> getResult(String pair) {
@@ -71,5 +75,16 @@ public class StrategyService {
         BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(effectivePair);
         List<Position> open = positionService.getOpenPositions(effectivePair, effectiveInterval, strategyType);
         return open.stream().map(p -> toPositionView(p, currentPrice)).toList();
+    }
+
+    public List<TradeHistoryEntry> getTradeHistory (String pair, String interval, StrategyType strategyType, LocalDateTime from, LocalDateTime to) {
+        String effectivePair     = pair != null ? pair : tradingConfig.primaryPair();
+        String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
+        return tradeRepository
+                .findHistoryByPairAndIntervalAndStrategy(
+                        effectivePair, effectiveInterval, strategyType, from, to)
+                .stream()
+                .map(TradeHistoryEntry::from)
+                .toList();
     }
 }

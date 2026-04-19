@@ -55,6 +55,28 @@ public class Trade {
     @Column(name = "pnl_pct", precision = 18, scale = 8)
     private BigDecimal pnlPct;
 
+    @Column(name = "entry_fee", nullable = false, precision = 18, scale = 8)
+    @Builder.Default
+    private BigDecimal entryFee = BigDecimal.ZERO;
+
+    @Column(name = "exit_fee", nullable = false, precision = 18, scale = 8)
+    @Builder.Default
+    private BigDecimal exitFee = BigDecimal.ZERO;
+
+    @Column(name = "entry_slippage", nullable = false, precision = 18, scale = 8)
+    @Builder.Default
+    private BigDecimal entrySlippage = BigDecimal.ZERO;
+
+    @Column(name = "exit_slippage", nullable = false, precision = 18, scale = 8)
+    @Builder.Default
+    private BigDecimal exitSlippage = BigDecimal.ZERO;
+
+    @Column(name = "net_pnl", precision = 18, scale = 8)
+    private BigDecimal netPnl;
+
+    @Column(name = "net_pnl_pct", precision = 18, scale = 8)
+    private BigDecimal netPnlPct;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "strategy_name", nullable = false, length = 50)
     private StrategyType strategyName;

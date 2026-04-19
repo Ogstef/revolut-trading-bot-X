@@ -85,6 +85,9 @@ trading:
       MFI: 5000.00
       DONCHIAN: 5000.00
       ICHIMOKU: 5000.00
+  costs:
+    fee-rate: 0.0019   # per-side fee as decimal (e.g. 0.0025 = 0.25% Revolut Metal, 0.0149 = 1.49% Standard)
+    slippage-rate: 0.0005  # per-side slippage estimate (e.g. 0.0005 = 0.05%)
   strategy:
     ema-short-period: 9
     ema-long-period: 21
@@ -93,11 +96,11 @@ trading:
     rsi-oversold: 30
   risk:
     max-position-pct: 2.0
-    max-concurrent-positions: 1
+    max-concurrent-positions: 3
     max-daily-loss-pct: 10.0
     max-consecutive-losses: 15
-    take-profit-pct: 5.0
-    stop-loss-pct: 3.0
+    take-profit-pct: 12
+    stop-loss-pct: 4
 
 revolut:
   api:

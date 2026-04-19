@@ -53,8 +53,12 @@ public class PaperTradingService {
     public Position openPosition(Signal signal, BigDecimal positionSizeEur, BigDecimal currentPrice) {
         OrderSide side = signal.type().name().equals("BUY") ? OrderSide.BUY : OrderSide.SELL;
 
-        // How much BTC we can buy with positionSizeEur at the current price
         BigDecimal quantity = positionSizeEur.divide(currentPrice, 8, RoundingMode.HALF_UP);
+        BigDecimal entryNotional = currentPrice.multiply(quantity);
+        BigDecimal entryFee      = entryNotional.multiply(config.getCosts().getFeeRate())
+                                                .setScale(8, RoundingMode.HALF_UP);
+        BigDecimal entrySlippage = entryNotional.multiply(config.getCosts().getSlippageRate())
+                                                .setScale(8, RoundingMode.HALF_UP);
 
         BigDecimal takeProfit = tpslManager.calculateTakeProfit(currentPrice);
         BigDecimal stopLoss   = tpslManager.calculateStopLoss(currentPrice);
@@ -83,11 +87,13 @@ public class PaperTradingService {
                 .quantity(quantity)
                 .strategyName(signal.strategyType())
                 .tradingMode(TradingMode.PAPER)
+                .entryFee(entryFee)
+                .entrySlippage(entrySlippage)
                 .build();
         tradeRepository.save(trade);
 
-        log.info("[PAPER] Opened {} position id={} — entry={} qty={} tp={} sl={}",
-                side, position.getId(), currentPrice, quantity, takeProfit, stopLoss);
+        log.info("[PAPER] Opened {} position id={} — entry={} qty={} entryFee={} entrySlip={} tp={} sl={}",
+                side, position.getId(), currentPrice, quantity, entryFee, entrySlippage, takeProfit, stopLoss);
         alertService.positionOpened(position);
         return position;
     }
@@ -109,9 +115,25 @@ public class PaperTradingService {
         BigDecimal pnl    = calculatePnl(position, currentPrice);
         BigDecimal pnlPct = calculatePnlPct(position, pnl);
 
+        BigDecimal exitNotional  = currentPrice.multiply(position.getQuantity());
+        BigDecimal exitFee       = exitNotional.multiply(config.getCosts().getFeeRate())
+                                               .setScale(8, RoundingMode.HALF_UP);
+        BigDecimal exitSlippage  = exitNotional.multiply(config.getCosts().getSlippageRate())
+                                               .setScale(8, RoundingMode.HALF_UP);
+        BigDecimal totalCosts    = trade.getEntryFee()
+                                        .add(trade.getEntrySlippage())
+                                        .add(exitFee)
+                                        .add(exitSlippage);
+        BigDecimal netPnl        = pnl.subtract(totalCosts).setScale(8, RoundingMode.HALF_UP);
+        BigDecimal netPnlPct     = calculatePnlPct(position, netPnl);
+
         trade.setExitPrice(currentPrice);
         trade.setPnl(pnl);
         trade.setPnlPct(pnlPct);
+        trade.setExitFee(exitFee);
+        trade.setExitSlippage(exitSlippage);
+        trade.setNetPnl(netPnl);
+        trade.setNetPnlPct(netPnlPct);
         trade.setExitReason(exitReason);
         trade.setClosedAt(LocalDateTime.now());
         tradeRepository.save(trade);
@@ -120,8 +142,11 @@ public class PaperTradingService {
         position.setClosedAt(LocalDateTime.now());
         positionRepository.save(position);
 
-        log.info("[PAPER] Closed {} position id={} — exit={} pnl={} pnlPct={}% reason={}",
-                position.getSide(), position.getId(), currentPrice, pnl, pnlPct, exitReason);
+        log.info("[PAPER] Closed {} position id={} — exit={} gross={} fees={} slip={} net={} reason={}",
+                position.getSide(), position.getId(), currentPrice, pnl,
+                trade.getEntryFee().add(exitFee),
+                trade.getEntrySlippage().add(exitSlippage),
+                netPnl, exitReason);
         alertService.positionClosed(position, trade);
         return trade;
     }

@@ -13,14 +13,23 @@ public record DailySummaryData(
         int wins,
         int losses,
         BigDecimal winRate,
+        // Gross P&L periods
         BigDecimal dailyPnl,
         BigDecimal weeklyPnl,
         BigDecimal allTimePnl,
+        // Net P&L periods (after fees + slippage)
+        BigDecimal dailyNetPnl,
+        BigDecimal weeklyNetPnl,
+        BigDecimal allTimeNetPnl,
+        // Fee breakdown for today's closed trades
+        BigDecimal dailyFees,
+        BigDecimal dailySlippage,
         int openPositions,
         int circuitBreakersActive,
         List<TopMover> topWinners,
         List<TopMover> topLosers,
         String botMode
 ) {
-    public record TopMover(String pair, String strategy, String interval, BigDecimal pnl) {}
+    public record TopMover(String pair, String strategy, String interval,
+                           BigDecimal grossPnl, BigDecimal netPnl) {}
 }

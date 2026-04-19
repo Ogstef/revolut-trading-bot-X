@@ -11,6 +11,7 @@ import com.stefo.revolut_trading_bot.model.enums.BotEventType;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.portfolio.TradingStats;
 import com.stefo.revolut_trading_bot.portfolio.TradeService;
+import com.stefo.revolut_trading_bot.repository.CandlestickRepository;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import com.stefo.revolut_trading_bot.scheduler.BotStateService;
 import com.stefo.revolut_trading_bot.service.*;
@@ -52,6 +53,7 @@ public class DashboardController {
     private final FearGreedService fearGreedService;
     private final StatsAggregationService statsAggregationService;
     private final BotEventService botEventService;
+    private final CandlestickRepository candlestickRepository;
 
     // ─── Status ───────────────────────────────────────────────────────────────
 
@@ -268,15 +270,7 @@ public class DashboardController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
-        String effectivePair     = pair != null ? pair : tradingConfig.primaryPair();
-        String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
-        List<TradeHistoryEntry> history = tradeRepository
-                .findHistoryByPairAndIntervalAndStrategy(
-                        effectivePair, effectiveInterval, strategyType, from, to)
-                .stream()
-                .map(TradeHistoryEntry::from)
-                .toList();
-        return ResponseEntity.ok(history);
+        return ResponseEntity.ok(strategyService.getTradeHistory(pair,interval,strategyType,from,to));
     }
 
     /**
@@ -366,6 +360,29 @@ public class DashboardController {
         return ResponseEntity.ok(
             botEventService.recent(limit, types == null ? null : Set.copyOf(types))
         );
+    }
+
+    // ─── Candles ──────────────────────────────────────────────────────────────
+
+    /**
+     * OHLCV candles for a (pair, interval) from the local DB cache.
+     * Returns the last {@code limit} candles in ascending timestamp order.
+     * GET /api/candles?pair=BTC-EUR&interval=15m&limit=500
+     */
+    @GetMapping("/candles")
+    public ResponseEntity<List<CandleDto>> candles(
+            @RequestParam String pair,
+            @RequestParam String interval,
+            @RequestParam(defaultValue = "500") int limit) {
+        var all = candlestickRepository.findByPairAndIntervalOrderByTimestampAsc(pair, interval);
+        var result = all.stream()
+                .skip(Math.max(0, all.size() - limit))
+                .map(c -> new CandleDto(
+                        c.getTimestamp().toEpochSecond(java.time.ZoneOffset.UTC),
+                        c.getOpenPrice(), c.getHighPrice(), c.getLowPrice(),
+                        c.getClosePrice(), c.getVolume()))
+                .toList();
+        return ResponseEntity.ok(result);
     }
 
     // ─── Market sentiment ─────────────────────────────────────────────────────

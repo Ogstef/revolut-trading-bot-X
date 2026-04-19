@@ -26,6 +26,9 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
     @Query("SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t WHERE t.executedAt >= :since")
     BigDecimal sumPnlSince(LocalDateTime since);
 
+    @Query("SELECT COALESCE(SUM(COALESCE(t.netPnl, t.pnl)), 0) FROM Trade t WHERE t.executedAt >= :since")
+    BigDecimal sumNetPnlSince(LocalDateTime since);
+
     @Query("""
             SELECT t FROM Trade t WHERE t.pair = :pair
             ORDER BY t.executedAt DESC
@@ -173,10 +176,20 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
                    COALESCE(AVG(CASE WHEN t.pnl > 0  THEN t.pnl END), 0),
                    COALESCE(AVG(CASE WHEN t.pnl <= 0 THEN t.pnl END), 0),
                    COALESCE(MAX(t.pnl), 0),
-                   COALESCE(MIN(t.pnl), 0)
+                   COALESCE(MIN(t.pnl), 0),
+                   COALESCE(SUM(t.netPnl), 0),
+                   COALESCE(SUM(t.entryFee + t.exitFee + t.entrySlippage + t.exitSlippage), 0),
+                   COALESCE(AVG(CASE WHEN t.netPnl > 0  THEN t.netPnl END), 0),
+                   COALESCE(AVG(CASE WHEN t.netPnl <= 0 THEN t.netPnl END), 0)
             FROM Trade t
             WHERE t.closedAt IS NOT NULL AND t.pnl IS NOT NULL
             GROUP BY t.pair, t.interval, t.strategyName
             """)
     List<Object[]> aggregateStatsByTriple();
+
+    @Query("SELECT COALESCE(SUM(COALESCE(t.netPnl, t.pnl)), 0) FROM Trade t WHERE t.executedAt >= :since AND t.pair = :pair AND t.interval = :interval AND t.strategyName = :strategyName")
+    BigDecimal sumNetPnlSinceAndPairAndIntervalAndStrategy(@Param("since") LocalDateTime since,
+                                                            @Param("pair") String pair,
+                                                            @Param("interval") String interval,
+                                                            @Param("strategyName") StrategyType strategyName);
 }
