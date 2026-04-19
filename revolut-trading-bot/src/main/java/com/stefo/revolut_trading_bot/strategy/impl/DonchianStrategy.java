@@ -78,18 +78,20 @@ public class DonchianStrategy implements TradingStrategy {
 
         log.info("[DONCHIAN] pair={} close={} upper={} lower={} widthPct={}", pair, priceVal, upperVal, lowerVal, widthPct);
 
-        // Breakout to the upside: prev close was inside/below, now close is above upper
-        if (closePrev <= upperPrev && closeNow > upperNow) {
-            String reason = String.format("Donchian breakout UP — close=%.2f > upper=%.2f (new 20-bar high)",
-                    closeNow, upperNow);
+        // Breakout to the upside: prev close was inside/below prev channel, now close exceeds prev upper.
+        // We compare closeNow against upperPrev (not upperNow) because the channel always includes the
+        // current bar's own high, making closeNow > upperNow mathematically impossible.
+        if (closePrev <= upperPrev && closeNow > upperPrev) {
+            String reason = String.format("Donchian breakout UP — close=%.2f > prev upper=%.2f (new 20-bar high)",
+                    closeNow, upperPrev);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(77), reason,
                     pair, null, StrategyType.DONCHIAN, now, upperVal, lowerVal, widthPct, priceVal);
         }
 
-        // Breakout to the downside: prev close was inside/above, now close is below lower
-        if (closePrev >= lowerPrev && closeNow < lowerNow) {
-            String reason = String.format("Donchian breakout DOWN — close=%.2f < lower=%.2f (new 20-bar low)",
-                    closeNow, lowerNow);
+        // Breakout to the downside: prev close was inside/above prev channel, now close falls below prev lower.
+        if (closePrev >= lowerPrev && closeNow < lowerPrev) {
+            String reason = String.format("Donchian breakout DOWN — close=%.2f < prev lower=%.2f (new 20-bar low)",
+                    closeNow, lowerPrev);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(73), reason,
                     pair, null, StrategyType.DONCHIAN, now, upperVal, lowerVal, widthPct, priceVal);
         }
