@@ -27,7 +27,8 @@ public enum StrategyType {
     // Phase 10
     MFI("Money Flow Index"),
     DONCHIAN("Donchian Breakout"),
-    ICHIMOKU("Ichimoku Cloud");
+    ICHIMOKU("Ichimoku Cloud"),
+    SUPERTREND("Supertrend");
 
     /** Human-readable label used in logs and API responses. */
     private final String displayName;
