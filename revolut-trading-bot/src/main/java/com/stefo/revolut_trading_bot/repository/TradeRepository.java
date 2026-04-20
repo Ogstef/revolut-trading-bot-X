@@ -23,10 +23,10 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
 
     List<Trade> findByExecutedAtAfter(LocalDateTime since);
 
-    @Query("SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t WHERE t.executedAt >= :since")
+    @Query("SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t WHERE t.closedAt >= :since AND t.pnl IS NOT NULL")
     BigDecimal sumPnlSince(LocalDateTime since);
 
-    @Query("SELECT COALESCE(SUM(COALESCE(t.netPnl, t.pnl)), 0) FROM Trade t WHERE t.executedAt >= :since")
+    @Query("SELECT COALESCE(SUM(COALESCE(t.netPnl, t.pnl)), 0) FROM Trade t WHERE t.closedAt >= :since AND t.pnl IS NOT NULL")
     BigDecimal sumNetPnlSince(LocalDateTime since);
 
     @Query("""
@@ -192,4 +192,17 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
                                                             @Param("pair") String pair,
                                                             @Param("interval") String interval,
                                                             @Param("strategyName") StrategyType strategyName);
+
+    // Display-only variants that filter by closedAt (realized P&L) — used by TradeService.getPnlBreakdownForStrategy
+    @Query("SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t WHERE t.closedAt >= :since AND t.pnl IS NOT NULL AND t.pair = :pair AND t.interval = :interval AND t.strategyName = :strategyName")
+    BigDecimal sumPnlClosedSinceAndPairAndIntervalAndStrategy(@Param("since") LocalDateTime since,
+                                                               @Param("pair") String pair,
+                                                               @Param("interval") String interval,
+                                                               @Param("strategyName") StrategyType strategyName);
+
+    @Query("SELECT COALESCE(SUM(COALESCE(t.netPnl, t.pnl)), 0) FROM Trade t WHERE t.closedAt >= :since AND t.pnl IS NOT NULL AND t.pair = :pair AND t.interval = :interval AND t.strategyName = :strategyName")
+    BigDecimal sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(@Param("since") LocalDateTime since,
+                                                                  @Param("pair") String pair,
+                                                                  @Param("interval") String interval,
+                                                                  @Param("strategyName") StrategyType strategyName);
 }

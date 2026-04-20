@@ -78,7 +78,18 @@ public class DailySummaryScheduler {
                 .multiply(BigDecimal.valueOf(100))
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // PnL breakdown (gross + net via existing service)
+        // Daily gross + net computed from the same closedToday list so all three metrics are consistent
+        BigDecimal dailyGross = closedToday.stream()
+                .map(t -> safe(t.getPnl()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        BigDecimal dailyNet = closedToday.stream()
+                .map(t -> t.getNetPnl() != null ? t.getNetPnl() : t.getPnl())
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        // Weekly / all-time from the service (closedAt-based after repository fix)
         PnlBreakdown pnl = tradeService.getPnlBreakdown();
 
         // Fee aggregates for trades closed today
@@ -119,10 +130,10 @@ public class DailySummaryScheduler {
                 wins,
                 losses,
                 winRate,
-                pnl.daily(),
+                dailyGross,
                 pnl.weekly(),
                 pnl.allTime(),
-                pnl.dailyNet(),
+                dailyNet,
                 pnl.weeklyNet(),
                 pnl.allTimeNet(),
                 dailyFees,

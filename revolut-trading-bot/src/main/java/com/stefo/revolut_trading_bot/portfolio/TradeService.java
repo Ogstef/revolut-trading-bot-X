@@ -198,15 +198,15 @@ public class TradeService {
         LocalDateTime startOfMonth = LocalDate.now().withDayOfMonth(1).atStartOfDay();
         LocalDateTime epoch        = LocalDateTime.of(2000, 1, 1, 0, 0);
 
-        BigDecimal daily   = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
-        BigDecimal weekly  = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
-        BigDecimal monthly = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
-        BigDecimal allTime = tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
+        BigDecimal daily   = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
+        BigDecimal weekly  = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
+        BigDecimal monthly = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
+        BigDecimal allTime = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
 
-        BigDecimal dailyNet   = tradeRepository.sumNetPnlSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
-        BigDecimal weeklyNet  = tradeRepository.sumNetPnlSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
-        BigDecimal monthlyNet = tradeRepository.sumNetPnlSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
-        BigDecimal allTimeNet = tradeRepository.sumNetPnlSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
+        BigDecimal dailyNet   = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
+        BigDecimal weeklyNet  = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
+        BigDecimal monthlyNet = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
+        BigDecimal allTimeNet = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
 
         return new PnlBreakdown(
                 daily.setScale(2, RoundingMode.HALF_UP),
