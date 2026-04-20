@@ -3,6 +3,7 @@ package com.stefo.revolut_trading_bot.strategy;
 import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.market.MarketDataService;
 import com.stefo.revolut_trading_bot.model.entity.SignalLog;
+import com.stefo.revolut_trading_bot.model.enums.SignalType;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.repository.SignalLogRepository;
 import lombok.RequiredArgsConstructor;
@@ -60,9 +61,15 @@ public class SignalEngine {
                 for (TradingStrategy strategy : strategies) {
                     Signal signal = strategy.evaluate(series, pair).withInterval(intervalLabel);
                     logsToPersist.add(toSignalLog(signal));
-                    log.info("[{}][{}][{}] {} confidence={} — {}",
-                            pair, intervalLabel, strategy.strategyType(),
-                            signal.type(), signal.confidence(), signal.reason());
+                    if (signal.type() == SignalType.HOLD) {
+                        log.debug("[{}][{}][{}] HOLD confidence={} — {}",
+                                pair, intervalLabel, strategy.strategyType(),
+                                signal.confidence(), signal.reason());
+                    } else {
+                        log.info("[{}][{}][{}] {} confidence={} — {}",
+                                pair, intervalLabel, strategy.strategyType(),
+                                signal.type(), signal.confidence(), signal.reason());
+                    }
                     allSignals.add(signal);
                 }
             }
