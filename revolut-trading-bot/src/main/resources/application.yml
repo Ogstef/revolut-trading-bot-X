@@ -86,8 +86,8 @@ trading:
       DONCHIAN: 5000.00
       ICHIMOKU: 5000.00
   costs:
-    fee-rate: 0.0019   # per-side fee as decimal (e.g. 0.0025 = 0.25% Revolut Metal, 0.0149 = 1.49% Standard)
-    slippage-rate: 0.0005  # per-side slippage estimate (e.g. 0.0005 = 0.05%)
+    fee-rate: 0.0009   # per-side taker fee — Revolut X exchange rate (same for all plans, incl. Ultra Metal)
+    slippage-rate: 0.0005  # per-side slippage estimate — 5 bps, reasonable for BTC/ETH market orders at this size
   strategy:
     ema-short-period: 9
     ema-long-period: 21
@@ -125,6 +125,7 @@ telegram:
 
 logging:
   level:
-    com.stefo.revolut_trading_bot: INFO    # your code
-    org.springframework: WARN              # suppress Spring noise
-    org.hibernate: WARN                    # suppress SQL noise
+    com.stefo.revolut_trading_bot: INFO          # your code
+    com.stefo.revolut_trading_bot.strategy.impl: DEBUG  # per-strategy indicator values (noisy, debug only)
+    org.springframework: WARN                    # suppress Spring noise
+    org.hibernate: WARN                          # suppress SQL noise
