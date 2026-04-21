@@ -84,17 +84,19 @@ public class MacdStrategy implements TradingStrategy {
 
         log.info("[MACD] macd={} signal={} hist={} price={}", macdNow, signalNow, histNow, priceNow);
 
-        // Bullish crossover: histogram was ≤ 0, now > 0
-        if (histPrev.compareTo(BigDecimal.ZERO) <= 0 && histNow.compareTo(BigDecimal.ZERO) > 0) {
-            String reason = String.format("MACD histogram crossed above zero — hist=%.6f macd=%.2f signal=%.2f",
+        // Bullish crossover: histogram was ≤ 0, now > 0 AND macd line is still negative (early-cycle only)
+        if (histPrev.compareTo(BigDecimal.ZERO) <= 0 && histNow.compareTo(BigDecimal.ZERO) > 0
+                && macdNow.compareTo(BigDecimal.ZERO) < 0) {
+            String reason = String.format("MACD histogram crossed above zero with macd line negative — hist=%.6f macd=%.2f signal=%.2f",
                     histNow.doubleValue(), macdNow.doubleValue(), signalNow.doubleValue());
             return new Signal(SignalType.BUY, BigDecimal.valueOf(72), reason,
                     pair, null, StrategyType.MACD, now, macdNow, signalNow, histNow, priceNow);
         }
 
-        // Bearish crossover: histogram was ≥ 0, now < 0
-        if (histPrev.compareTo(BigDecimal.ZERO) >= 0 && histNow.compareTo(BigDecimal.ZERO) < 0) {
-            String reason = String.format("MACD histogram crossed below zero — hist=%.6f macd=%.2f signal=%.2f",
+        // Bearish crossover: histogram was ≥ 0, now < 0 AND macd line is still positive (early-cycle only)
+        if (histPrev.compareTo(BigDecimal.ZERO) >= 0 && histNow.compareTo(BigDecimal.ZERO) < 0
+                && macdNow.compareTo(BigDecimal.ZERO) > 0) {
+            String reason = String.format("MACD histogram crossed below zero with macd line positive — hist=%.6f macd=%.2f signal=%.2f",
                     histNow.doubleValue(), macdNow.doubleValue(), signalNow.doubleValue());
             return new Signal(SignalType.SELL, BigDecimal.valueOf(68), reason,
                     pair, null, StrategyType.MACD, now, macdNow, signalNow, histNow, priceNow);

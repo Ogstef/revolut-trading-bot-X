@@ -40,7 +40,8 @@ import java.time.Instant;
 public class ParabolicSarStrategy implements TradingStrategy {
 
     // SAR needs a few bars to initialise; use a safe minimum
-    private static final int MIN_BARS = 5;
+    private static final int    MIN_BARS    = 5;
+    private static final double MIN_GAP_PCT = 0.3;  // price must be ≥0.3% away from SAR
 
     @Override
     public StrategyType strategyType() {
@@ -79,18 +80,20 @@ public class ParabolicSarStrategy implements TradingStrategy {
 
         log.info("[PARABOLIC_SAR] sar={} price={} distance={}%", sarVal, priceVal, distance);
 
-        // BUY flip: was below or at SAR, now above SAR
-        if (pricePrev <= sarPrev && priceNow > sarNow) {
-            String reason = String.format("Price flipped above SAR — price=%.2f sar=%.2f gap=%.2f%%",
-                    priceNow, sarNow, distance.doubleValue());
+        // BUY flip: was below or at SAR, now above SAR, and gap is meaningful
+        if (pricePrev <= sarPrev && priceNow > sarNow
+                && Math.abs(distance.doubleValue()) >= MIN_GAP_PCT) {
+            String reason = String.format("Price flipped above SAR — price=%.2f sar=%.2f gap=%.2f%% (min %.1f%%)",
+                    priceNow, sarNow, distance.doubleValue(), MIN_GAP_PCT);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(75), reason,
                     pair, null, StrategyType.PARABOLIC_SAR, now, sarVal, null, distance, priceVal);
         }
 
-        // SELL flip: was above or at SAR, now below SAR
-        if (pricePrev >= sarPrev && priceNow < sarNow) {
-            String reason = String.format("Price flipped below SAR — price=%.2f sar=%.2f gap=%.2f%%",
-                    priceNow, sarNow, distance.doubleValue());
+        // SELL flip: was above or at SAR, now below SAR, and gap is meaningful
+        if (pricePrev >= sarPrev && priceNow < sarNow
+                && Math.abs(distance.doubleValue()) >= MIN_GAP_PCT) {
+            String reason = String.format("Price flipped below SAR — price=%.2f sar=%.2f gap=%.2f%% (min %.1f%%)",
+                    priceNow, sarNow, distance.doubleValue(), MIN_GAP_PCT);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(71), reason,
                     pair, null, StrategyType.PARABOLIC_SAR, now, sarVal, null, distance, priceVal);
         }

@@ -36,10 +36,20 @@ import java.time.Instant;
 @Component
 public class StochRsiStrategy implements TradingStrategy {
 
-    private static final int    RSI_PERIOD    = 14;
-    private static final int    STOCH_PERIOD  = 14;
-    private static final double OVERSOLD      = 0.20;
-    private static final double OVERBOUGHT    = 0.80;
+    private static final int    RSI_PERIOD      = 14;
+    private static final int    STOCH_PERIOD    = 14;
+    private static final double OVERSOLD_BTC    = 0.20;
+    private static final double OVERSOLD_ALT    = 0.10;
+    private static final double OVERBOUGHT_BTC  = 0.80;
+    private static final double OVERBOUGHT_ALT  = 0.90;
+
+    private static double oversold(String pair) {
+        return "BTC-EUR".equals(pair) ? OVERSOLD_BTC : OVERSOLD_ALT;
+    }
+
+    private static double overbought(String pair) {
+        return "BTC-EUR".equals(pair) ? OVERBOUGHT_BTC : OVERBOUGHT_ALT;
+    }
 
     // Need RSI_PERIOD + STOCH_PERIOD bars + 1 for prev
     private static final int MIN_BARS = RSI_PERIOD + STOCH_PERIOD + 1;
@@ -79,17 +89,17 @@ public class StochRsiStrategy implements TradingStrategy {
         log.info("[STOCH_RSI] stoch={} prev={} rsi={} price={}", stochDisplay, bd(stochPrev * 100), rsiDisplay, price);
 
         // Recovering from oversold
-        if (stochPrev < OVERSOLD && stochNow >= OVERSOLD) {
+        if (stochPrev < oversold(pair) && stochNow >= oversold(pair)) {
             String reason = String.format("StochRSI crossed above %.0f — stoch=%.1f (was %.1f)",
-                    OVERSOLD * 100, stochNow * 100, stochPrev * 100);
+                    oversold(pair) * 100, stochNow * 100, stochPrev * 100);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(74), reason,
                     pair, null, StrategyType.STOCH_RSI, now, stochDisplay, null, rsiDisplay, price);
         }
 
         // Entering overbought
-        if (stochPrev < OVERBOUGHT && stochNow >= OVERBOUGHT) {
+        if (stochPrev < overbought(pair) && stochNow >= overbought(pair)) {
             String reason = String.format("StochRSI crossed above %.0f — stoch=%.1f (was %.1f)",
-                    OVERBOUGHT * 100, stochNow * 100, stochPrev * 100);
+                    overbought(pair) * 100, stochNow * 100, stochPrev * 100);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(70), reason,
                     pair, null, StrategyType.STOCH_RSI, now, stochDisplay, null, rsiDisplay, price);
         }

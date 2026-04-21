@@ -37,11 +37,21 @@ import java.time.Instant;
 @Component
 public class CciStrategy implements TradingStrategy {
 
-    private static final int    PERIOD    = 20;
-    private static final double OVERSOLD  = -100.0;
-    private static final double OVERBOUGHT = 100.0;
+    private static final int    PERIOD         = 20;
+    private static final double OVERSOLD_BTC   = -100.0;
+    private static final double OVERSOLD_ALT   = -150.0;
+    private static final double OVERBOUGHT_BTC =  100.0;
+    private static final double OVERBOUGHT_ALT =  150.0;
 
     private static final int MIN_BARS = PERIOD;
+
+    private static double oversold(String pair) {
+        return "BTC-EUR".equals(pair) ? OVERSOLD_BTC : OVERSOLD_ALT;
+    }
+
+    private static double overbought(String pair) {
+        return "BTC-EUR".equals(pair) ? OVERBOUGHT_BTC : OVERBOUGHT_ALT;
+    }
 
     @Override
     public StrategyType strategyType() {
@@ -74,23 +84,23 @@ public class CciStrategy implements TradingStrategy {
 
         log.info("[CCI] cci={} prev={} price={}", cciVal, bd(cciPrev), priceVal);
 
-        // Recovering from oversold: CCI was below -100, now at-or-above -100
-        if (cciPrev < OVERSOLD && cciNow >= OVERSOLD) {
+        // Recovering from oversold: CCI was below threshold, now at-or-above threshold
+        if (cciPrev < oversold(pair) && cciNow >= oversold(pair)) {
             String reason = String.format("CCI recovered from oversold — cci=%.1f (was %.1f, crossed %.0f)",
-                    cciNow, cciPrev, OVERSOLD);
+                    cciNow, cciPrev, oversold(pair));
             return new Signal(SignalType.BUY, BigDecimal.valueOf(71), reason,
                     pair, null, StrategyType.CCI, now, null, null, cciVal, priceVal);
         }
 
-        // Entering overbought: CCI was below +100, now at-or-above +100
-        if (cciPrev < OVERBOUGHT && cciNow >= OVERBOUGHT) {
+        // Entering overbought: CCI was below threshold, now at-or-above threshold
+        if (cciPrev < overbought(pair) && cciNow >= overbought(pair)) {
             String reason = String.format("CCI entered overbought — cci=%.1f (was %.1f, crossed %.0f)",
-                    cciNow, cciPrev, OVERBOUGHT);
+                    cciNow, cciPrev, overbought(pair));
             return new Signal(SignalType.SELL, BigDecimal.valueOf(67), reason,
                     pair, null, StrategyType.CCI, now, null, null, cciVal, priceVal);
         }
 
-        String zone   = cciNow < OVERSOLD ? "oversold" : cciNow > OVERBOUGHT ? "overbought" : "neutral";
+        String zone   = cciNow < oversold(pair) ? "oversold" : cciNow > overbought(pair) ? "overbought" : "neutral";
         String reason = String.format("CCI no threshold crossing — cci=%.1f (%s)", cciNow, zone);
         return hold(reason, pair, now, cciVal, priceVal);
     }
