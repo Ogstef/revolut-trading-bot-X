@@ -100,39 +100,39 @@ class StochRsiStrategySpec extends Specification {
 
     // ─── pair-aware threshold dispatch ────────────────────────────────────────
 
-    def "BTC-EUR BUY reason contains threshold 20 (the 0.20 oversold threshold)"() {
+    def "BTC-EUR 15m BUY reason contains threshold 10 (tight 15m oversold)"() {
         given: "a series designed to push StochRSI into oversold then recover — 30 flat + 10 falling + 5 recovery bars"
         def series = buildOversoldRecoverySeries()
 
         when:
         def signal = strategy.evaluate(series, "BTC-EUR")
 
-        then: "if a BUY fires for BTC, the reason must reference the 20-level threshold"
+        then: "if a BUY fires for BTC at 15m, the reason must reference the tight 10-level threshold"
         if (signal.type() == SignalType.BUY) {
-            assert signal.reason().contains("20")
+            assert signal.reason().contains("10")
         } else {
             // HOLD or SELL is valid too — no assertion on threshold when no BUY fires
             signal.type() in [SignalType.HOLD, SignalType.SELL]
         }
     }
 
-    def "ETH-EUR BUY reason contains threshold 10 (the tighter 0.10 oversold threshold)"() {
+    def "ETH-EUR 15m BUY reason contains threshold 5 (tight 15m oversold for alts)"() {
         given: "same series shape"
         def series = buildOversoldRecoverySeries()
 
         when:
         def signal = strategy.evaluate(series, "ETH-EUR")
 
-        then: "if a BUY fires for ETH, the reason must reference the 10-level threshold, NOT 20"
+        then: "if a BUY fires for ETH at 15m, the reason must reference the tight 5-level threshold, NOT 10"
         if (signal.type() == SignalType.BUY) {
-            assert signal.reason().contains("10")
-            assert !signal.reason().startsWith("StochRSI crossed above 20")
+            assert signal.reason().contains("5")
+            assert !signal.reason().startsWith("StochRSI crossed above 10")
         } else {
             signal.type() in [SignalType.HOLD, SignalType.SELL]
         }
     }
 
-    def "BTC-EUR SELL reason contains threshold 80 (the 0.80 overbought threshold)"() {
+    def "BTC-EUR 15m SELL reason contains threshold 90 (tight 15m overbought)"() {
         given:
         def series = buildOverboughtEntrySeries()
 
@@ -141,13 +141,13 @@ class StochRsiStrategySpec extends Specification {
 
         then:
         if (signal.type() == SignalType.SELL) {
-            assert signal.reason().contains("80")
+            assert signal.reason().contains("90")
         } else {
             signal.type() in [SignalType.HOLD, SignalType.BUY]
         }
     }
 
-    def "ETH-EUR SELL reason contains threshold 90 (the tighter 0.90 overbought threshold)"() {
+    def "ETH-EUR 15m SELL reason contains threshold 95 (tight 15m overbought for alts)"() {
         given:
         def series = buildOverboughtEntrySeries()
 
@@ -156,8 +156,8 @@ class StochRsiStrategySpec extends Specification {
 
         then:
         if (signal.type() == SignalType.SELL) {
-            assert signal.reason().contains("90")
-            assert !signal.reason().startsWith("StochRSI crossed above 80")
+            assert signal.reason().contains("95")
+            assert !signal.reason().startsWith("StochRSI crossed above 90")
         } else {
             signal.type() in [SignalType.HOLD, SignalType.BUY]
         }
@@ -218,6 +218,72 @@ class StochRsiStrategySpec extends Specification {
         then:
         signal.type() in [SignalType.BUY, SignalType.SELL, SignalType.HOLD]
         signal.strategyType() == StrategyType.STOCH_RSI
+    }
+
+    // ─── interval-aware: 1h uses loose thresholds, not tight 15m ones ────────
+
+    def "BTC-EUR 1h BUY reason contains loose threshold 20 (must NOT use tight 15m threshold 10)"() {
+        given:
+        def series = buildOversoldRecoverySeries1h()
+
+        when:
+        def signal = strategy.evaluate(series, "BTC-EUR")
+
+        then:
+        if (signal.type() == SignalType.BUY) {
+            assert signal.reason().contains("20")
+            assert !signal.reason().startsWith("StochRSI crossed above 10")
+        } else {
+            signal.type() in [SignalType.HOLD, SignalType.SELL]
+        }
+    }
+
+    def "ETH-EUR 1h BUY reason contains loose threshold 10 (must NOT use tight 15m threshold 5)"() {
+        given:
+        def series = buildOversoldRecoverySeries1h()
+
+        when:
+        def signal = strategy.evaluate(series, "ETH-EUR")
+
+        then:
+        if (signal.type() == SignalType.BUY) {
+            assert signal.reason().contains("10")
+            assert !signal.reason().startsWith("StochRSI crossed above 5")
+        } else {
+            signal.type() in [SignalType.HOLD, SignalType.SELL]
+        }
+    }
+
+    def "BTC-EUR 1h SELL reason contains loose threshold 80 (must NOT use tight 15m threshold 90)"() {
+        given:
+        def series = buildOverboughtEntrySeries1h()
+
+        when:
+        def signal = strategy.evaluate(series, "BTC-EUR")
+
+        then:
+        if (signal.type() == SignalType.SELL) {
+            assert signal.reason().contains("80")
+            assert !signal.reason().startsWith("StochRSI crossed above 90")
+        } else {
+            signal.type() in [SignalType.HOLD, SignalType.BUY]
+        }
+    }
+
+    def "ETH-EUR 1h SELL reason contains loose threshold 90 (must NOT use tight 15m threshold 95)"() {
+        given:
+        def series = buildOverboughtEntrySeries1h()
+
+        when:
+        def signal = strategy.evaluate(series, "ETH-EUR")
+
+        then:
+        if (signal.type() == SignalType.SELL) {
+            assert signal.reason().contains("90")
+            assert !signal.reason().startsWith("StochRSI crossed above 95")
+        } else {
+            signal.type() in [SignalType.HOLD, SignalType.BUY]
+        }
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -307,6 +373,52 @@ class StochRsiStrategySpec extends Specification {
             series.addBar(period, start.plusMinutes(i++ * 15), p, p + 0.5, p - 0.5, p, 1000.0)
         }
         series.addBar(period, start.plusMinutes(i++ * 15), 90.0, 90.5, 89.5, 90.0, 1000.0)
+        series
+    }
+
+    /**
+     * Same shape as buildOversoldRecoverySeries but with 60-minute bars.
+     * Used to verify that 1h bars use the LOOSE thresholds (0.20/0.10), not the tight 15m ones.
+     */
+    private static BarSeries buildOversoldRecoverySeries1h() {
+        def series = new BaseBarSeriesBuilder().withName("oversold-test-1h").build()
+        def start  = ZonedDateTime.of(2024, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC)
+        def period = Duration.ofMinutes(60)
+        int i = 1
+        30.times {
+            double p = 100.0 + (i % 2 == 0 ? 0.5 : -0.5)
+            series.addBar(period, start.plusMinutes(i++ * 60), p, p + 1, p - 1, p, 1000.0)
+        }
+        10.times { j ->
+            double p = 100.0 - (j + 1) * 5
+            series.addBar(period, start.plusMinutes(i++ * 60), p, p + 0.5, p - 0.5, p, 1000.0)
+        }
+        5.times { j ->
+            double p = 50.0 + (j + 1) * 6
+            series.addBar(period, start.plusMinutes(i++ * 60), p, p + 0.5, p - 0.5, p, 1000.0)
+        }
+        series
+    }
+
+    /**
+     * Same shape as buildOverboughtEntrySeries but with 60-minute bars.
+     */
+    private static BarSeries buildOverboughtEntrySeries1h() {
+        def series = new BaseBarSeriesBuilder().withName("overbought-test-1h").build()
+        def start  = ZonedDateTime.of(2024, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC)
+        def period = Duration.ofMinutes(60)
+        int i = 1
+        30.times {
+            double p = 100.0 + (i % 2 == 0 ? 0.5 : -0.5)
+            series.addBar(period, start.plusMinutes(i++ * 60), p, p + 1, p - 1, p, 1000.0)
+        }
+        15.times { j ->
+            double p = 100.0 + (j + 1) * 5
+            series.addBar(period, start.plusMinutes(i++ * 60), p, p + 0.5, p - 0.5, p, 1000.0)
+        }
+        3.times {
+            series.addBar(period, start.plusMinutes(i++ * 60), 175.0, 175.5, 174.5, 175.0, 1000.0)
+        }
         series
     }
 }

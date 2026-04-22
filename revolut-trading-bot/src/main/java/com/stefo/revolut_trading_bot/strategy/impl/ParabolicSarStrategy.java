@@ -42,6 +42,8 @@ public class ParabolicSarStrategy implements TradingStrategy {
     // SAR needs a few bars to initialise; use a safe minimum
     private static final int    MIN_BARS    = 5;
     private static final double MIN_GAP_PCT = 0.3;  // price must be ≥0.3% away from SAR
+    private static final double MIN_GAP_PCT_15M  = 1.0;   // tight filter for 15m chop only
+    private static final long   TIGHT_INTERVAL_MAX_MINUTES = 60L;
 
     @Override
     public StrategyType strategyType() {
@@ -59,6 +61,9 @@ public class ParabolicSarStrategy implements TradingStrategy {
             log.warn(reason);
             return hold(reason, pair, now, null, null, null);
         }
+
+        long intervalMinutes = series.getBar(lastIdx).getTimePeriod().toMinutes();
+        double minGap = intervalMinutes < TIGHT_INTERVAL_MAX_MINUTES ? MIN_GAP_PCT_15M : MIN_GAP_PCT;
 
         // acceleration factor = 0.02, max acceleration = 0.20
         ParabolicSarIndicator sar   = new ParabolicSarIndicator(series,
@@ -82,18 +87,18 @@ public class ParabolicSarStrategy implements TradingStrategy {
 
         // BUY flip: was below or at SAR, now above SAR, and gap is meaningful
         if (pricePrev <= sarPrev && priceNow > sarNow
-                && Math.abs(distance.doubleValue()) >= MIN_GAP_PCT) {
+                && Math.abs(distance.doubleValue()) >= minGap) {
             String reason = String.format("Price flipped above SAR — price=%.2f sar=%.2f gap=%.2f%% (min %.1f%%)",
-                    priceNow, sarNow, distance.doubleValue(), MIN_GAP_PCT);
+                    priceNow, sarNow, distance.doubleValue(), minGap);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(75), reason,
                     pair, null, StrategyType.PARABOLIC_SAR, now, sarVal, null, distance, priceVal);
         }
 
         // SELL flip: was above or at SAR, now below SAR, and gap is meaningful
         if (pricePrev >= sarPrev && priceNow < sarNow
-                && Math.abs(distance.doubleValue()) >= MIN_GAP_PCT) {
+                && Math.abs(distance.doubleValue()) >= minGap) {
             String reason = String.format("Price flipped below SAR — price=%.2f sar=%.2f gap=%.2f%% (min %.1f%%)",
-                    priceNow, sarNow, distance.doubleValue(), MIN_GAP_PCT);
+                    priceNow, sarNow, distance.doubleValue(), minGap);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(71), reason,
                     pair, null, StrategyType.PARABOLIC_SAR, now, sarVal, null, distance, priceVal);
         }

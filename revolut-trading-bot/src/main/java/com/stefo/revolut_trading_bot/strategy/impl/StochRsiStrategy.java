@@ -43,12 +43,23 @@ public class StochRsiStrategy implements TradingStrategy {
     private static final double OVERBOUGHT_BTC  = 0.80;
     private static final double OVERBOUGHT_ALT  = 0.90;
 
-    private static double oversold(String pair) {
-        return "BTC-EUR".equals(pair) ? OVERSOLD_BTC : OVERSOLD_ALT;
+    // Tight thresholds applied only at intervals < 60m (15m is too noisy at loose thresholds)
+    private static final double OVERSOLD_BTC_15M    = 0.10;
+    private static final double OVERSOLD_ALT_15M    = 0.05;
+    private static final double OVERBOUGHT_BTC_15M  = 0.90;
+    private static final double OVERBOUGHT_ALT_15M  = 0.95;
+    private static final long   INTRADAY_TIGHT_MAX_MINUTES = 60L;
+
+    private static double oversold(String pair, long intervalMinutes) {
+        boolean tight = intervalMinutes < INTRADAY_TIGHT_MAX_MINUTES;
+        if ("BTC-EUR".equals(pair)) return tight ? OVERSOLD_BTC_15M   : OVERSOLD_BTC;
+        return tight ? OVERSOLD_ALT_15M : OVERSOLD_ALT;
     }
 
-    private static double overbought(String pair) {
-        return "BTC-EUR".equals(pair) ? OVERBOUGHT_BTC : OVERBOUGHT_ALT;
+    private static double overbought(String pair, long intervalMinutes) {
+        boolean tight = intervalMinutes < INTRADAY_TIGHT_MAX_MINUTES;
+        if ("BTC-EUR".equals(pair)) return tight ? OVERBOUGHT_BTC_15M : OVERBOUGHT_BTC;
+        return tight ? OVERBOUGHT_ALT_15M : OVERBOUGHT_ALT;
     }
 
     // Need RSI_PERIOD + STOCH_PERIOD bars + 1 for prev
@@ -71,6 +82,8 @@ public class StochRsiStrategy implements TradingStrategy {
             return hold(reason, pair, now, null, null);
         }
 
+        long intervalMinutes = series.getBar(lastIdx).getTimePeriod().toMinutes();
+
         ClosePriceIndicator   close    = new ClosePriceIndicator(series);
         RSIIndicator          rsi      = new RSIIndicator(close, RSI_PERIOD);
         StochasticRSIIndicator stochRsi = new StochasticRSIIndicator(rsi, STOCH_PERIOD);
@@ -86,20 +99,23 @@ public class StochRsiStrategy implements TradingStrategy {
         BigDecimal rsiDisplay   = bd(rsiNow);
         BigDecimal price        = bd(priceNow);
 
+        double oversoldThr   = oversold(pair, intervalMinutes);
+        double overboughtThr = overbought(pair, intervalMinutes);
+
         log.info("[STOCH_RSI] stoch={} prev={} rsi={} price={}", stochDisplay, bd(stochPrev * 100), rsiDisplay, price);
 
         // Recovering from oversold
-        if (stochPrev < oversold(pair) && stochNow >= oversold(pair)) {
+        if (stochPrev < oversoldThr && stochNow >= oversoldThr) {
             String reason = String.format("StochRSI crossed above %.0f — stoch=%.1f (was %.1f)",
-                    oversold(pair) * 100, stochNow * 100, stochPrev * 100);
+                    oversoldThr * 100, stochNow * 100, stochPrev * 100);
             return new Signal(SignalType.BUY, BigDecimal.valueOf(74), reason,
                     pair, null, StrategyType.STOCH_RSI, now, stochDisplay, null, rsiDisplay, price);
         }
 
         // Entering overbought
-        if (stochPrev < overbought(pair) && stochNow >= overbought(pair)) {
+        if (stochPrev < overboughtThr && stochNow >= overboughtThr) {
             String reason = String.format("StochRSI crossed above %.0f — stoch=%.1f (was %.1f)",
-                    overbought(pair) * 100, stochNow * 100, stochPrev * 100);
+                    overboughtThr * 100, stochNow * 100, stochPrev * 100);
             return new Signal(SignalType.SELL, BigDecimal.valueOf(70), reason,
                     pair, null, StrategyType.STOCH_RSI, now, stochDisplay, null, rsiDisplay, price);
         }
