@@ -9,6 +9,7 @@ import com.stefo.revolut_trading_bot.model.dto.PositionView
 import com.stefo.revolut_trading_bot.model.enums.StrategyType
 import com.stefo.revolut_trading_bot.portfolio.TradingStats
 import com.stefo.revolut_trading_bot.portfolio.TradeService
+import com.stefo.revolut_trading_bot.repository.CandlestickRepository
 import com.stefo.revolut_trading_bot.repository.TradeRepository
 import com.stefo.revolut_trading_bot.scheduler.BotStateService
 import com.stefo.revolut_trading_bot.service.BotStatusService
@@ -48,13 +49,14 @@ class DashboardControllerSpec extends Specification {
     FearGreedService         fearGreedService         = Mock()
     StatsAggregationService  statsAggregationService  = Mock()
     BotEventService          botEventService          = Mock()
+    CandlestickRepository    candlestickRepository    = Mock()
 
     @Subject
     DashboardController controller = new DashboardController(
             botStateService, tradingConfig, tradeService, tradeRepository,
             alertService, botStatusService, positionService, configService,
             strategyService, signalService, fearGreedService,
-            statsAggregationService, botEventService)
+            statsAggregationService, botEventService, candlestickRepository)
 
     def setup() {
         tradingConfig.primaryPair()     >> "BTC-EUR"
@@ -166,7 +168,9 @@ class DashboardControllerSpec extends Specification {
         given:
         def breakdown = new PnlBreakdown(
                 BigDecimal.valueOf(50), BigDecimal.valueOf(200),
-                BigDecimal.valueOf(800), BigDecimal.valueOf(3000))
+                BigDecimal.valueOf(800), BigDecimal.valueOf(3000),
+                BigDecimal.valueOf(48), BigDecimal.valueOf(195),
+                BigDecimal.valueOf(780), BigDecimal.valueOf(2950))
         tradeService.getPnlBreakdown() >> breakdown
 
         when:
@@ -317,7 +321,9 @@ class DashboardControllerSpec extends Specification {
         given:
         tradeService.getPnlBreakdownForStrategy(null, null, StrategyType.RSI_MOMENTUM) >>
                 new PnlBreakdown(BigDecimal.valueOf(10), BigDecimal.valueOf(40),
-                        BigDecimal.valueOf(100), BigDecimal.valueOf(500))
+                        BigDecimal.valueOf(100), BigDecimal.valueOf(500),
+                        BigDecimal.valueOf(9), BigDecimal.valueOf(38),
+                        BigDecimal.valueOf(95), BigDecimal.valueOf(475))
 
         when:
         def response = controller.strategyPnl(StrategyType.RSI_MOMENTUM, null, null)
@@ -374,6 +380,7 @@ class DashboardControllerSpec extends Specification {
 
     private static TradingStats emptyStats() {
         new TradingStats(0, 0, 0, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO)
     }
 }

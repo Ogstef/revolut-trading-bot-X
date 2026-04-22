@@ -156,10 +156,16 @@ class TradeServiceSpec extends Specification {
     def "getPnlBreakdown returns correct periods with scaled values"() {
         given:
         tradeRepository.sumPnlSince(_ as LocalDateTime) >>> [
-            BigDecimal.valueOf(50),     // daily
-            BigDecimal.valueOf(200),    // weekly
-            BigDecimal.valueOf(800),    // monthly
-            BigDecimal.valueOf(3000)    // all-time
+            BigDecimal.valueOf(50),
+            BigDecimal.valueOf(200),
+            BigDecimal.valueOf(800),
+            BigDecimal.valueOf(3000)
+        ]
+        tradeRepository.sumNetPnlSince(_ as LocalDateTime) >>> [
+            BigDecimal.valueOf(48),
+            BigDecimal.valueOf(190),
+            BigDecimal.valueOf(780),
+            BigDecimal.valueOf(2950)
         ]
 
         when:
@@ -176,11 +182,17 @@ class TradeServiceSpec extends Specification {
 
     def "getPnlBreakdownForStrategy returns strategy-scoped PnL periods"() {
         given:
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", "15m", StrategyType.BOLLINGER) >>> [
+        tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", "15m", StrategyType.BOLLINGER) >>> [
             BigDecimal.valueOf(10),
             BigDecimal.valueOf(40),
             BigDecimal.valueOf(150),
             BigDecimal.valueOf(500)
+        ]
+        tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", "15m", StrategyType.BOLLINGER) >>> [
+            BigDecimal.valueOf(9),
+            BigDecimal.valueOf(38),
+            BigDecimal.valueOf(145),
+            BigDecimal.valueOf(475)
         ]
 
         when:

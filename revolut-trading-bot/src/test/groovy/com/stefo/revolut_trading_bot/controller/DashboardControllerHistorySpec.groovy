@@ -2,12 +2,12 @@ package com.stefo.revolut_trading_bot.controller
 
 import com.stefo.revolut_trading_bot.alert.AlertService
 import com.stefo.revolut_trading_bot.config.TradingConfig
-import com.stefo.revolut_trading_bot.model.entity.Position
-import com.stefo.revolut_trading_bot.model.entity.Trade
+import com.stefo.revolut_trading_bot.model.dto.TradeHistoryEntry
 import com.stefo.revolut_trading_bot.model.enums.OrderSide
 import com.stefo.revolut_trading_bot.model.enums.StrategyType
 import com.stefo.revolut_trading_bot.model.enums.TradingMode
 import com.stefo.revolut_trading_bot.portfolio.TradeService
+import com.stefo.revolut_trading_bot.repository.CandlestickRepository
 import com.stefo.revolut_trading_bot.repository.TradeRepository
 import com.stefo.revolut_trading_bot.scheduler.BotStateService
 import com.stefo.revolut_trading_bot.service.BotStatusService
@@ -43,13 +43,14 @@ class DashboardControllerHistorySpec extends Specification {
     FearGreedService         fearGreedService         = Mock()
     StatsAggregationService  statsAggregationService  = Mock()
     BotEventService          botEventService          = Mock()
+    CandlestickRepository    candlestickRepository    = Mock()
 
     @Subject
     DashboardController controller = new DashboardController(
             botStateService, tradingConfig, tradeService, tradeRepository,
             alertService, botStatusService, positionService, configService,
             strategyService, signalService, fearGreedService,
-            statsAggregationService, botEventService)
+            statsAggregationService, botEventService, candlestickRepository)
 
     def setup() {
         tradingConfig.primaryPair()     >> "BTC-EUR"
@@ -58,8 +59,7 @@ class DashboardControllerHistorySpec extends Specification {
 
     def "strategyHistory() returns empty list when repository has no matches"() {
         given:
-        tradeRepository.findHistoryByPairAndIntervalAndStrategy(
-                "BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, null, null) >> []
+        strategyService.getTradeHistory(null, null, StrategyType.EMA_CROSSOVER, null, null) >> []
 
         when:
         def response = controller.strategyHistory(
@@ -72,43 +72,23 @@ class DashboardControllerHistorySpec extends Specification {
 
     def "strategyHistory() enriches each trade with parent-position fields"() {
         given:
-        def opened   = LocalDateTime.of(2026, 4, 1, 12, 0)
-        def closed   = LocalDateTime.of(2026, 4, 1, 13, 30)
+        def opened = LocalDateTime.of(2026, 4, 1, 12, 0)
+        def closed = LocalDateTime.of(2026, 4, 1, 13, 30)
 
-        def position = Position.builder()
-                .id(7L)
-                .pair("BTC-EUR")
-                .interval("15m")
-                .side(OrderSide.BUY)
-                .entryPrice(new BigDecimal("100.00"))
-                .quantity(new BigDecimal("0.5"))
-                .takeProfit(new BigDecimal("105.00"))
-                .stopLoss(new BigDecimal("97.00"))
-                .strategyName(StrategyType.EMA_CROSSOVER)
-                .signalReason("EMA9 crossed above EMA21 | RSI=52.3")
-                .openedAt(opened)
-                .build()
+        def entry = new TradeHistoryEntry(
+                11L, "BTC-EUR", "15m", OrderSide.BUY,
+                new BigDecimal("100.00"), new BigDecimal("103.00"),
+                new BigDecimal("0.5"), new BigDecimal("1.50"), new BigDecimal("3.00"),
+                StrategyType.EMA_CROSSOVER, "SIGNAL_EXIT", TradingMode.PAPER,
+                opened, closed,
+                "EMA9 crossed above EMA21 | RSI=52.3",
+                new BigDecimal("105.00"), new BigDecimal("97.00"),
+                opened,
+                5400L, new BigDecimal("1.0000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("1.50"), new BigDecimal("3.00"))
 
-        def trade = Trade.builder()
-                .id(11L)
-                .position(position)
-                .pair("BTC-EUR")
-                .interval("15m")
-                .side(OrderSide.BUY)
-                .entryPrice(new BigDecimal("100.00"))
-                .exitPrice(new BigDecimal("103.00"))
-                .quantity(new BigDecimal("0.5"))
-                .pnl(new BigDecimal("1.50"))
-                .pnlPct(new BigDecimal("3.00"))
-                .strategyName(StrategyType.EMA_CROSSOVER)
-                .exitReason("SIGNAL_EXIT")
-                .tradingMode(TradingMode.PAPER)
-                .executedAt(opened)
-                .closedAt(closed)
-                .build()
-
-        tradeRepository.findHistoryByPairAndIntervalAndStrategy(
-                "BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, null, null) >> [trade]
+        strategyService.getTradeHistory("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, null, null) >> [entry]
 
         when:
         def response = controller.strategyHistory(
@@ -123,32 +103,25 @@ class DashboardControllerHistorySpec extends Specification {
             takeProfit() == new BigDecimal("105.00")
             stopLoss() == new BigDecimal("97.00")
             openedAt() == opened
-            holdingDurationSeconds() == 5400L  // 1h30m
-            // R = pnl(1.50) / (|100-97| * 0.5) = 1.50 / 1.5 = 1.0000
+            holdingDurationSeconds() == 5400L
             rMultiple() == new BigDecimal("1.0000")
         }
     }
 
     def "strategyHistory() handles a trade whose position is null (legacy data)"() {
         given:
-        def trade = Trade.builder()
-                .id(99L)
-                .pair("BTC-EUR")
-                .interval("15m")
-                .side(OrderSide.SELL)
-                .entryPrice(new BigDecimal("100.00"))
-                .exitPrice(new BigDecimal("99.00"))
-                .quantity(new BigDecimal("1.0"))
-                .pnl(new BigDecimal("-1.00"))
-                .pnlPct(new BigDecimal("-1.00"))
-                .strategyName(StrategyType.MACD)
-                .exitReason("MANUAL")
-                .tradingMode(TradingMode.PAPER)
-                .executedAt(LocalDateTime.now())
-                .build()
+        def entry = new TradeHistoryEntry(
+                99L, "BTC-EUR", "15m", OrderSide.SELL,
+                new BigDecimal("100.00"), new BigDecimal("99.00"),
+                new BigDecimal("1.0"), new BigDecimal("-1.00"), new BigDecimal("-1.00"),
+                StrategyType.MACD, "MANUAL", TradingMode.PAPER,
+                LocalDateTime.now(), null,
+                null, null, null, null,
+                null, null,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("-1.00"), new BigDecimal("-1.00"))
 
-        tradeRepository.findHistoryByPairAndIntervalAndStrategy(
-                "BTC-EUR", "15m", StrategyType.MACD, null, null) >> [trade]
+        strategyService.getTradeHistory(null, null, StrategyType.MACD, null, null) >> [entry]
 
         when:
         def response = controller.strategyHistory(
@@ -179,8 +152,7 @@ class DashboardControllerHistorySpec extends Specification {
 
         then:
         response.statusCode == HttpStatus.OK
-        1 * tradeRepository.findHistoryByPairAndIntervalAndStrategy(
-                "ETH-EUR", "1h", StrategyType.BOLLINGER, from, to) >> []
+        1 * strategyService.getTradeHistory("ETH-EUR", "1h", StrategyType.BOLLINGER, from, to) >> []
     }
 
     def "strategyHistory() defaults pair and interval when not provided"() {
@@ -190,7 +162,6 @@ class DashboardControllerHistorySpec extends Specification {
 
         then:
         response.statusCode == HttpStatus.OK
-        1 * tradeRepository.findHistoryByPairAndIntervalAndStrategy(
-                "BTC-EUR", "15m", StrategyType.RSI_MOMENTUM, null, null) >> []
+        1 * strategyService.getTradeHistory(null, null, StrategyType.RSI_MOMENTUM, null, null) >> []
     }
 }

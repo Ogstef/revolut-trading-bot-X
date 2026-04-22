@@ -6,6 +6,7 @@ import com.stefo.revolut_trading_bot.model.entity.Position
 import com.stefo.revolut_trading_bot.model.enums.OrderSide
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus
 import com.stefo.revolut_trading_bot.model.enums.StrategyType
+import com.stefo.revolut_trading_bot.repository.TradeRepository
 import com.stefo.revolut_trading_bot.risk.RiskManager
 import com.stefo.revolut_trading_bot.strategy.SignalEngine
 import spock.lang.Specification
@@ -20,10 +21,11 @@ class StrategyServiceSpec extends Specification {
     RiskManager      riskManager      = Mock()
     MarketDataService marketDataService = Mock()
     PositionService  positionService  = Mock()
+    TradeRepository  tradeRepository  = Mock()
 
     @Subject
     StrategyService service = new StrategyService(
-            tradingConfig, signalEngine, riskManager, marketDataService, positionService)
+            tradingConfig, signalEngine, riskManager, marketDataService, positionService, tradeRepository)
 
     // ─── getResult ────────────────────────────────────────────────────────────
 
