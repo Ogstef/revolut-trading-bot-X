@@ -174,7 +174,115 @@ class TakeProfitStopLossManagerSpec extends Specification {
         !result.isPresent()
     }
 
+    // ─── Liquidation (leveraged) ─────────────────────────────────────────────
+
+    @Unroll
+    def "liquidation price for #leverage× long ≈ entry × (1 − 1/leverage + mm%)"() {
+        when:
+        def liq = manager.calculateLiquidationPrice(
+                BigDecimal.valueOf(100), OrderSide.BUY, leverage, new BigDecimal("0.5"))
+
+        then: "within 0.1 EUR of expected"
+        (liq - expected).abs() < new BigDecimal("0.1")
+
+        where:
+        leverage || expected
+        3        || BigDecimal.valueOf(67.167)   // 100 × (1 − 0.3333 + 0.005)
+        5        || BigDecimal.valueOf(80.5)     // 100 × (1 − 0.2 + 0.005)
+        10       || BigDecimal.valueOf(90.5)     // 100 × (1 − 0.1 + 0.005)
+    }
+
+    @Unroll
+    def "liquidation price for #leverage× short ≈ entry × (1 + 1/leverage − mm%)"() {
+        when:
+        def liq = manager.calculateLiquidationPrice(
+                BigDecimal.valueOf(100), OrderSide.SELL, leverage, new BigDecimal("0.5"))
+
+        then:
+        (liq - expected).abs() < new BigDecimal("0.1")
+
+        where:
+        leverage || expected
+        3        || BigDecimal.valueOf(132.833)
+        5        || BigDecimal.valueOf(119.5)
+        10       || BigDecimal.valueOf(109.5)
+    }
+
+    def "liquidation price for spot returns entry price unchanged"() {
+        when:
+        def liq = manager.calculateLiquidationPrice(
+                BigDecimal.valueOf(100), OrderSide.BUY, 1, new BigDecimal("0.5"))
+
+        then:
+        liq == BigDecimal.valueOf(100)
+    }
+
+    def "LIQUIDATED takes priority over TP/SL when leveraged long crosses liquidation"() {
+        given: "10x long at 100, liq ≈ 90.5, price drops to 85"
+        def position = leveragedLong(BigDecimal.valueOf(100), new BigDecimal("90.50"))
+        position.setTakeProfit(BigDecimal.valueOf(112))
+        position.setStopLoss(BigDecimal.valueOf(96))         // SL also breached
+
+        when:
+        def result = manager.checkExitCondition(position, BigDecimal.valueOf(85))
+
+        then:
+        result.isPresent()
+        result.get() == TakeProfitStopLossManager.EXIT_LIQUIDATED
+    }
+
+    def "leveraged short triggers LIQUIDATED when price rises past liquidation"() {
+        given: "5x short at 100, liq ≈ 119.5, price jumps to 125"
+        def position = leveragedShort(BigDecimal.valueOf(100), new BigDecimal("119.50"))
+        position.setTakeProfit(BigDecimal.valueOf(88))
+        position.setStopLoss(BigDecimal.valueOf(104))
+
+        when:
+        def result = manager.checkExitCondition(position, BigDecimal.valueOf(125))
+
+        then:
+        result.isPresent()
+        result.get() == TakeProfitStopLossManager.EXIT_LIQUIDATED
+    }
+
+    def "leveraged position within safe range returns empty"() {
+        given:
+        def position = leveragedLong(BigDecimal.valueOf(100), new BigDecimal("90.50"))
+        position.setTakeProfit(BigDecimal.valueOf(112))
+        position.setStopLoss(BigDecimal.valueOf(96))
+
+        when:
+        def result = manager.checkExitCondition(position, BigDecimal.valueOf(105))
+
+        then:
+        !result.isPresent()
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private static Position leveragedLong(BigDecimal entry, BigDecimal liq) {
+        Position.builder()
+                .side(OrderSide.BUY)
+                .entryPrice(entry)
+                .quantity(BigDecimal.valueOf(0.1))
+                .takeProfit(entry.multiply(BigDecimal.valueOf(1.12)))
+                .stopLoss(entry.multiply(BigDecimal.valueOf(0.96)))
+                .leverage((short) 10)
+                .liquidationPrice(liq)
+                .build()
+    }
+
+    private static Position leveragedShort(BigDecimal entry, BigDecimal liq) {
+        Position.builder()
+                .side(OrderSide.SELL)
+                .entryPrice(entry)
+                .quantity(BigDecimal.valueOf(0.1))
+                .takeProfit(entry.multiply(BigDecimal.valueOf(0.88)))
+                .stopLoss(entry.multiply(BigDecimal.valueOf(1.04)))
+                .leverage((short) 5)
+                .liquidationPrice(liq)
+                .build()
+    }
 
     private static TradingConfig buildConfig(BigDecimal tpPct, BigDecimal slPct) {
         def risk = new TradingConfig.Risk()

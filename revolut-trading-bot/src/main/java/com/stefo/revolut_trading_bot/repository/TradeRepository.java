@@ -4,6 +4,7 @@ import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.model.enums.TradingMode;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -124,9 +125,133 @@ public interface TradeRepository extends JpaRepository<Trade, Long> {
             SELECT t.pair, t.interval, t.strategyName, COALESCE(SUM(t.pnl), 0)
             FROM Trade t
             WHERE t.executedAt >= :since
+              AND t.vehicle = com.stefo.revolut_trading_bot.model.enums.TradingVehicle.SPOT
             GROUP BY t.pair, t.interval, t.strategyName
             """)
     List<Object[]> sumPnlSinceGroupedByPairIntervalStrategy(@Param("since") LocalDateTime since);
+
+    // ─── Vehicle-scoped queries (Phase 13 — leveraged trading) ────────────────
+
+    /** Daily PnL scoped to a specific (pair, interval, strategy, vehicle). */
+    @Query("""
+            SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t
+            WHERE t.executedAt >= :since
+              AND t.pair = :pair
+              AND t.interval = :interval
+              AND t.strategyName = :strategyName
+              AND t.vehicle = :vehicle
+            """)
+    BigDecimal sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(@Param("since") LocalDateTime since,
+                                                                   @Param("pair") String pair,
+                                                                   @Param("interval") String interval,
+                                                                   @Param("strategyName") StrategyType strategyName,
+                                                                   @Param("vehicle") TradingVehicle vehicle);
+
+    /** Recent trades for consecutive-loss streaks, scoped by vehicle. */
+    @Query("""
+            SELECT t FROM Trade t
+            WHERE t.pair = :pair
+              AND t.interval = :interval
+              AND t.strategyName = :strategyName
+              AND t.vehicle = :vehicle
+            ORDER BY t.executedAt DESC
+            LIMIT :limit
+            """)
+    List<Trade> findRecentTradesByPairAndIntervalAndStrategyAndVehicle(@Param("pair") String pair,
+                                                                       @Param("interval") String interval,
+                                                                       @Param("strategyName") StrategyType strategyName,
+                                                                       @Param("vehicle") TradingVehicle vehicle,
+                                                                       @Param("limit") int limit);
+
+    /** Derived — newest first, filtered by (pair, interval, strategy, vehicle). */
+    List<Trade> findByPairAndIntervalAndStrategyNameAndVehicleOrderByExecutedAtDesc(
+            String pair, String interval, StrategyType strategyName, TradingVehicle vehicle);
+
+    /** Vehicle-scoped history with optional date bounds. */
+    @Query("""
+            SELECT t FROM Trade t
+            LEFT JOIN FETCH t.position p
+            WHERE t.pair = :pair
+              AND t.interval = :interval
+              AND t.strategyName = :strategyName
+              AND t.vehicle = :vehicle
+              AND (CAST(:from AS LocalDateTime) IS NULL OR t.executedAt >= :from)
+              AND (CAST(:to   AS LocalDateTime) IS NULL OR t.executedAt <= :to)
+            ORDER BY t.executedAt DESC
+            """)
+    List<Trade> findHistoryByPairAndIntervalAndStrategyAndVehicle(@Param("pair") String pair,
+                                                                  @Param("interval") String interval,
+                                                                  @Param("strategyName") StrategyType strategyName,
+                                                                  @Param("vehicle") TradingVehicle vehicle,
+                                                                  @Param("from") LocalDateTime from,
+                                                                  @Param("to") LocalDateTime to);
+
+    /** Period gross PnL (closedAt window), vehicle-filtered — used by pnl breakdown. */
+    @Query("""
+            SELECT COALESCE(SUM(t.pnl), 0) FROM Trade t
+            WHERE t.closedAt >= :since AND t.pnl IS NOT NULL
+              AND t.pair = :pair AND t.interval = :interval
+              AND t.strategyName = :strategyName AND t.vehicle = :vehicle
+            """)
+    BigDecimal sumPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(
+            @Param("since") LocalDateTime since, @Param("pair") String pair,
+            @Param("interval") String interval, @Param("strategyName") StrategyType strategyName,
+            @Param("vehicle") TradingVehicle vehicle);
+
+    /** Period net PnL (closedAt window), vehicle-filtered. */
+    @Query("""
+            SELECT COALESCE(SUM(COALESCE(t.netPnl, t.pnl)), 0) FROM Trade t
+            WHERE t.closedAt >= :since AND t.pnl IS NOT NULL
+              AND t.pair = :pair AND t.interval = :interval
+              AND t.strategyName = :strategyName AND t.vehicle = :vehicle
+            """)
+    BigDecimal sumNetPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(
+            @Param("since") LocalDateTime since, @Param("pair") String pair,
+            @Param("interval") String interval, @Param("strategyName") StrategyType strategyName,
+            @Param("vehicle") TradingVehicle vehicle);
+
+    /**
+     * Most recent close timestamp per leveraged quadruple — used by
+     * {@code LeverageCooldownService.warmup()} on startup so post-close cooldowns
+     * survive a JVM restart.
+     * Returns rows: [String pair, String interval, StrategyType strategyName,
+     *                TradingVehicle vehicle, LocalDateTime maxClosedAt].
+     */
+    @Query("""
+            SELECT t.pair, t.interval, t.strategyName, t.vehicle, MAX(t.closedAt)
+            FROM Trade t
+            WHERE t.vehicle <> com.stefo.revolut_trading_bot.model.enums.TradingVehicle.SPOT
+              AND t.closedAt IS NOT NULL
+            GROUP BY t.pair, t.interval, t.strategyName, t.vehicle
+            """)
+    List<Object[]> maxClosedAtPerLeveragedQuadruple();
+
+    /**
+     * Same shape as {@link #aggregateStatsByTriple()} but filtered to one vehicle.
+     * Backs the {@code /api/stats/all-triples?vehicle=...} filter.
+     */
+    @Query("""
+            SELECT t.pair,
+                   t.interval,
+                   t.strategyName,
+                   COUNT(t),
+                   SUM(CASE WHEN t.pnl > 0 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN t.pnl <= 0 THEN 1 ELSE 0 END),
+                   COALESCE(SUM(t.pnl), 0),
+                   COALESCE(AVG(CASE WHEN t.pnl > 0  THEN t.pnl END), 0),
+                   COALESCE(AVG(CASE WHEN t.pnl <= 0 THEN t.pnl END), 0),
+                   COALESCE(MAX(t.pnl), 0),
+                   COALESCE(MIN(t.pnl), 0),
+                   COALESCE(SUM(t.netPnl), 0),
+                   COALESCE(SUM(t.entryFee + t.exitFee + t.entrySlippage + t.exitSlippage), 0),
+                   COALESCE(AVG(CASE WHEN t.netPnl > 0  THEN t.netPnl END), 0),
+                   COALESCE(AVG(CASE WHEN t.netPnl <= 0 THEN t.netPnl END), 0)
+            FROM Trade t
+            WHERE t.closedAt IS NOT NULL AND t.pnl IS NOT NULL
+              AND t.vehicle = :vehicle
+            GROUP BY t.pair, t.interval, t.strategyName
+            """)
+    List<Object[]> aggregateStatsByTripleAndVehicle(@Param("vehicle") TradingVehicle vehicle);
 
     /**
      * Trades executed after a cutoff, newest first. Used to compute consecutive-loss streaks

@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -62,6 +63,10 @@ public class TradingConfig {
     @Valid
     @NotNull
     private Costs costs = new Costs();
+
+    @Valid
+    @NotNull
+    private Leverage leverage = new Leverage();
 
     /**
      * The first configured pair — used by legacy single-pair endpoints (/api/status, /api/trades, etc.)
@@ -167,6 +172,56 @@ public class TradingConfig {
 
         @NotNull
         private BigDecimal slippageRate = BigDecimal.ZERO;
+    }
+
+    /**
+     * Leveraged paper-trading configuration. Fully isolated from spot.
+     *
+     * When enabled=true, a parallel virtual portfolio is created per
+     * (pair, strategy, interval, ratio) for the configured subsets.
+     * Notional = collateral × ratio; TP/SL % unchanged; funding charged per cycle.
+     */
+    @Data
+    public static class Leverage {
+        private boolean enabled = false;
+
+        private List<Integer> ratios = new ArrayList<>();
+
+        private List<String> pairs = new ArrayList<>();
+
+        private List<Integer> intervals = new ArrayList<>();
+
+        @NotNull
+        private BigDecimal collateralPerStrategy = new BigDecimal("1000.00");
+
+        @NotNull
+        private BigDecimal maintenanceMarginPct = new BigDecimal("0.5");
+
+        @NotNull
+        private BigDecimal fundingRatePer8h = new BigDecimal("0.0001");
+
+        @Positive
+        private int maxConcurrentPositions = 2;
+
+        @Positive
+        private BigDecimal maxPositionPct = new BigDecimal("100");
+
+        private boolean allowShorts = true;
+
+        /**
+         * Strategies blocked from opening NEW leveraged positions. Existing open
+         * positions close naturally; SPOT execution is unaffected. Empty = all
+         * strategies allowed on leverage (default).
+         */
+        private List<StrategyType> excludedStrategies = new ArrayList<>();
+
+        /**
+         * After a leveraged close on a (pair, interval, strategy, vehicle) quadruple,
+         * block new opens on that same quadruple for this many minutes. Breaks the
+         * every-30-second re-entry churn. 0 = disabled (default — backward compat).
+         */
+        @PositiveOrZero
+        private int cooldownMinutes = 0;
     }
 
     @Data

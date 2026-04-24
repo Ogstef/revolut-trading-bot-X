@@ -6,6 +6,7 @@ import com.stefo.revolut_trading_bot.model.dto.PositionView;
 import com.stefo.revolut_trading_bot.model.dto.TradeHistoryEntry;
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
 import com.stefo.revolut_trading_bot.strategy.SignalEngine;
@@ -70,21 +71,30 @@ public class StrategyService {
     }
 
     public List<PositionView> getPositionForStrategy(String pair, String interval, StrategyType strategyType) {
+        return getPositionForStrategy(pair, interval, strategyType, null);
+    }
+
+    public List<PositionView> getPositionForStrategy(String pair, String interval, StrategyType strategyType, TradingVehicle vehicle) {
         String effectivePair = pair != null ? pair : tradingConfig.primaryPair();
         String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
         BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(effectivePair);
-        List<Position> open = positionService.getOpenPositions(effectivePair, effectiveInterval, strategyType);
+        List<Position> open = vehicle == null
+                ? positionService.getOpenPositions(effectivePair, effectiveInterval, strategyType)
+                : positionService.getOpenPositions(effectivePair, effectiveInterval, strategyType, vehicle);
         return open.stream().map(p -> toPositionView(p, currentPrice)).toList();
     }
 
     public List<TradeHistoryEntry> getTradeHistory (String pair, String interval, StrategyType strategyType, LocalDateTime from, LocalDateTime to) {
+        return getTradeHistory(pair, interval, strategyType, from, to, null);
+    }
+
+    public List<TradeHistoryEntry> getTradeHistory(String pair, String interval, StrategyType strategyType,
+                                                   LocalDateTime from, LocalDateTime to, TradingVehicle vehicle) {
         String effectivePair     = pair != null ? pair : tradingConfig.primaryPair();
         String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
-        return tradeRepository
-                .findHistoryByPairAndIntervalAndStrategy(
-                        effectivePair, effectiveInterval, strategyType, from, to)
-                .stream()
-                .map(TradeHistoryEntry::from)
-                .toList();
+        var trades = vehicle == null
+                ? tradeRepository.findHistoryByPairAndIntervalAndStrategy(effectivePair, effectiveInterval, strategyType, from, to)
+                : tradeRepository.findHistoryByPairAndIntervalAndStrategyAndVehicle(effectivePair, effectiveInterval, strategyType, vehicle, from, to);
+        return trades.stream().map(TradeHistoryEntry::from).toList();
     }
 }

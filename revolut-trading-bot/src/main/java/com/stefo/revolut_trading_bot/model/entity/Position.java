@@ -3,6 +3,7 @@ package com.stefo.revolut_trading_bot.model.entity;
 import com.stefo.revolut_trading_bot.model.enums.OrderSide;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -57,6 +58,31 @@ public class Position {
 
     @Column(name = "signal_reason")
     private String signalReason;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    @Builder.Default
+    private TradingVehicle vehicle = TradingVehicle.SPOT;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private short leverage = 1;
+
+    @Column(precision = 18, scale = 8)
+    private BigDecimal collateral;
+
+    @Column(precision = 18, scale = 8)
+    private BigDecimal notional;
+
+    @Column(name = "liquidation_price", precision = 18, scale = 8)
+    private BigDecimal liquidationPrice;
+
+    @Column(name = "funding_fees_accrued", nullable = false, precision = 18, scale = 8)
+    @Builder.Default
+    private BigDecimal fundingFeesAccrued = BigDecimal.ZERO;
+
+    @Column(name = "last_funding_at")
+    private LocalDateTime lastFundingAt;
 
     @Column(name = "opened_at", nullable = false)
     @Builder.Default

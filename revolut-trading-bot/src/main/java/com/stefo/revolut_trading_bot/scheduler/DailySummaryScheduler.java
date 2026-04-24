@@ -124,6 +124,28 @@ public class DailySummaryScheduler {
                 .map(this::toMover)
                 .toList();
 
+        // Per-vehicle leverage aggregates — one row per distinct leveraged vehicle
+        // that had any closed trade today. Empty when leverage is off or inactive.
+        List<DailySummaryData.VehicleAggregate> leverageOverview = closedToday.stream()
+                .filter(t -> t.getVehicle() != null
+                        && t.getVehicle() != com.stefo.revolut_trading_bot.model.enums.TradingVehicle.SPOT)
+                .collect(java.util.stream.Collectors.groupingBy(Trade::getVehicle))
+                .entrySet().stream()
+                .map(e -> {
+                    var vehicle = e.getKey();
+                    var trades = e.getValue();
+                    int w = (int) trades.stream().filter(t -> safe(t.getNetPnl()).signum() > 0).count();
+                    int l = trades.size() - w;
+                    int liq = (int) trades.stream().filter(Trade::isLiquidated).count();
+                    BigDecimal gross = trades.stream().map(t -> safe(t.getPnl()))
+                            .reduce(BigDecimal.ZERO, BigDecimal::add).setScale(2, RoundingMode.HALF_UP);
+                    BigDecimal net   = trades.stream().map(t -> safe(t.getNetPnl()))
+                            .reduce(BigDecimal.ZERO, BigDecimal::add).setScale(2, RoundingMode.HALF_UP);
+                    return new DailySummaryData.VehicleAggregate(vehicle, trades.size(), w, l, liq, gross, net);
+                })
+                .sorted(Comparator.comparing(agg -> agg.vehicle().name()))
+                .toList();
+
         return new DailySummaryData(
                 LocalDate.now(),
                 closedToday.size(),
@@ -142,7 +164,8 @@ public class DailySummaryScheduler {
                 cbActive,
                 topWinners,
                 topLosers,
-                tradingConfig.getMode()
+                tradingConfig.getMode(),
+                leverageOverview
         );
     }
 

@@ -13,7 +13,7 @@
 - **Ta4j 0.16** — technical analysis indicators (EMA, RSI, MACD, Ichimoku, etc.)
 - **BouncyCastle 1.83** — Ed25519 request signing for Revolut X API
 - **OkHttp 4.12** — HTTP client for Revolut X API
-- **Flyway** — database migrations (V1–V8 applied)
+- **Flyway** — database migrations (V1–V9 applied; V9 adds leverage fields to `positions` / `trades`)
 - **Lombok** — boilerplate reduction
 - **Spock 2.4-M4 + Groovy** — test framework (project standard — use Spock for all new tests)
 - **Base package:** `com.stefo.revolut_trading_bot`
@@ -34,7 +34,7 @@ Maven binary: `/Applications/IntelliJ IDEA CE.app/Contents/plugins/maven/lib/mav
 
 ## Execution Unit
 
-The fundamental unit is the **triple `(pair, strategy, interval)`** — each combination is a fully isolated virtual portfolio with its own open/closed positions, trades, circuit breakers, and P&L tracking.
+The fundamental unit is the **quadruple `(pair, strategy, interval, vehicle)`** (was a triple before Phase 13) — each combination is a fully isolated virtual portfolio with its own open/closed positions, trades, and P&L tracking. `vehicle ∈ {SPOT, LEV_3X, LEV_5X, LEV_10X}`. SPOT is always active; `LEV_*X` activate only when `trading.leverage.enabled: true` and the ratio is in `trading.leverage.ratios`. Circuit breakers currently only scope to the SPOT triple — leveraged positions are gated by collateral availability (`VehicleBalanceService`).
 
 **Current configuration:**
 - **Pairs:** BTC-EUR, ETH-EUR, SOL-EUR

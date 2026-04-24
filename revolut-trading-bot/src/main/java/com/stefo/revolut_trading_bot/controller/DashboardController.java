@@ -9,6 +9,7 @@ import com.stefo.revolut_trading_bot.model.entity.SignalLog;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
 import com.stefo.revolut_trading_bot.model.enums.BotEventType;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.portfolio.TradingStats;
 import com.stefo.revolut_trading_bot.portfolio.TradeService;
 import com.stefo.revolut_trading_bot.repository.CandlestickRepository;
@@ -85,8 +86,9 @@ public class DashboardController {
      * GET /api/positions/live
      */
     @GetMapping("/positions/live")
-    public ResponseEntity<List<PositionView>> livePositions() {
-        return ResponseEntity.ok(positionService.getAllLiveViews());
+    public ResponseEntity<List<PositionView>> livePositions(
+            @RequestParam(required = false) TradingVehicle vehicle) {
+        return ResponseEntity.ok(positionService.getAllLiveViews(vehicle));
     }
 
     // ─── Trades ───────────────────────────────────────────────────────────────
@@ -207,6 +209,23 @@ public class DashboardController {
         return ResponseEntity.ok(result);
     }
 
+    /**
+     * GET /api/vehicles — lists all trading vehicles and whether each is active.
+     * SPOT is always active. LEV_*X are active only when enabled in trading.leverage.ratios.
+     */
+    @GetMapping("/vehicles")
+    public ResponseEntity<List<VehicleInfo>> vehicles() {
+        TradingConfig.Leverage lev = tradingConfig.getLeverage();
+        List<VehicleInfo> result = java.util.Arrays.stream(TradingVehicle.values())
+                .map(v -> {
+                    boolean active = v == TradingVehicle.SPOT
+                            || (lev.isEnabled() && lev.getRatios().contains(v.getLeverage()));
+                    return new VehicleInfo(v, v.getLeverage(), active);
+                })
+                .toList();
+        return ResponseEntity.ok(result);
+    }
+
     // ─── Multi-strategy endpoints (Phase 7 + Phase 8 + Phase 11) ─────────────
 
     /**
@@ -228,8 +247,9 @@ public class DashboardController {
     public ResponseEntity<List<PositionView>> strategyPositions(
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair,
-            @RequestParam(required = false) String interval) {
-        return ResponseEntity.ok(strategyService.getPositionForStrategy(pair, interval, strategyType));
+            @RequestParam(required = false) String interval,
+            @RequestParam(required = false) TradingVehicle vehicle) {
+        return ResponseEntity.ok(strategyService.getPositionForStrategy(pair, interval, strategyType, vehicle));
     }
 
     /**
@@ -241,12 +261,16 @@ public class DashboardController {
             @PathVariable StrategyType strategyType,
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(required = false) String pair,
-            @RequestParam(required = false) String interval) {
+            @RequestParam(required = false) String interval,
+            @RequestParam(required = false) TradingVehicle vehicle) {
         String effectivePair     = pair != null ? pair : tradingConfig.primaryPair();
         String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
-        return ResponseEntity.ok(
-                tradeRepository.findRecentTradesByPairAndIntervalAndStrategy(
-                        effectivePair, effectiveInterval, strategyType, limit));
+        List<Trade> rows = vehicle == null
+                ? tradeRepository.findRecentTradesByPairAndIntervalAndStrategy(
+                        effectivePair, effectiveInterval, strategyType, limit)
+                : tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle(
+                        effectivePair, effectiveInterval, strategyType, vehicle, limit);
+        return ResponseEntity.ok(rows);
     }
 
     /**
@@ -266,11 +290,12 @@ public class DashboardController {
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair,
             @RequestParam(required = false) String interval,
+            @RequestParam(required = false) TradingVehicle vehicle,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
-        return ResponseEntity.ok(strategyService.getTradeHistory(pair,interval,strategyType,from,to));
+        return ResponseEntity.ok(strategyService.getTradeHistory(pair, interval, strategyType, from, to, vehicle));
     }
 
     /**
@@ -281,8 +306,9 @@ public class DashboardController {
     public ResponseEntity<TradingStats> strategyStats(
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair,
-            @RequestParam(required = false) String interval) {
-        return ResponseEntity.ok(tradeService.getStatsForStrategy(pair, interval, strategyType));
+            @RequestParam(required = false) String interval,
+            @RequestParam(required = false) TradingVehicle vehicle) {
+        return ResponseEntity.ok(tradeService.getStatsForStrategy(pair, interval, strategyType, vehicle));
     }
 
     /**
@@ -293,8 +319,9 @@ public class DashboardController {
     public ResponseEntity<PnlBreakdown> strategyPnl(
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair,
-            @RequestParam(required = false) String interval) {
-        return ResponseEntity.ok(tradeService.getPnlBreakdownForStrategy(pair, interval, strategyType));
+            @RequestParam(required = false) String interval,
+            @RequestParam(required = false) TradingVehicle vehicle) {
+        return ResponseEntity.ok(tradeService.getPnlBreakdownForStrategy(pair, interval, strategyType, vehicle));
     }
 
     /**
@@ -342,8 +369,9 @@ public class DashboardController {
      * GET /api/stats/all-triples
      */
     @GetMapping("/stats/all-triples")
-    public ResponseEntity<List<TripleStats>> allTripleStats() {
-        return ResponseEntity.ok(statsAggregationService.getAllTripleStats());
+    public ResponseEntity<List<TripleStats>> allTripleStats(
+            @RequestParam(required = false) TradingVehicle vehicle) {
+        return ResponseEntity.ok(statsAggregationService.getAllTripleStats(vehicle));
     }
 
     // ─── Activity feed ────────────────────────────────────────────────────────

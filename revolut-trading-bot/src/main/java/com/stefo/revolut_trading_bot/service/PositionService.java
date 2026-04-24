@@ -5,6 +5,7 @@ import com.stefo.revolut_trading_bot.model.dto.PositionView;
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,13 @@ public class PositionService {
         return repository.findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, effectivePair, interval, strategyType);
     }
 
+    /** Vehicle-scoped variant of {@link #getOpenPositions(String, String, StrategyType)}. */
+    public List<Position> getOpenPositions(String effectivePair, String interval, StrategyType strategyType, TradingVehicle vehicle) {
+        if (vehicle == null) return getOpenPositions(effectivePair, interval, strategyType);
+        return repository.findByStatusAndPairAndIntervalAndStrategyNameAndVehicle(
+                OrderStatus.OPEN, effectivePair, interval, strategyType, vehicle);
+    }
+
     private List<PositionView> getViews(List<Position> positions) {
         Set<String> distinctPairs = positions.stream().map(Position::getPair).collect(Collectors.toSet());
         Map<String, BigDecimal> priceByPair = distinctPairs.stream()
@@ -49,7 +57,14 @@ public class PositionService {
     }
 
     public List<PositionView> getAllLiveViews() {
-        List<Position> positions = repository.findByStatus(OrderStatus.OPEN);
+        return getAllLiveViews(null);
+    }
+
+    /** Vehicle-scoped variant — when null, returns every open position regardless of vehicle. */
+    public List<PositionView> getAllLiveViews(TradingVehicle vehicle) {
+        List<Position> positions = vehicle == null
+                ? repository.findByStatus(OrderStatus.OPEN)
+                : repository.findByStatusAndVehicle(OrderStatus.OPEN, vehicle);
         return getViews(positions);
     }
 

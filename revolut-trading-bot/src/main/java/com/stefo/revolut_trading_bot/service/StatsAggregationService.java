@@ -4,6 +4,7 @@ import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.model.dto.TripleStats;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
@@ -31,8 +32,20 @@ public class StatsAggregationService {
     private final RiskManager riskManager;
 
     public List<TripleStats> getAllTripleStats() {
+        return getAllTripleStats(null);
+    }
+
+    /**
+     * Per-triple stats filtered to a specific vehicle. When {@code vehicle} is null, the
+     * original behaviour is preserved: trade aggregates across all vehicles, open-position
+     * counts filtered to SPOT (matches existing leaderboard semantics).
+     */
+    public List<TripleStats> getAllTripleStats(TradingVehicle vehicle) {
+        List<Object[]> tradeAggRows = vehicle == null
+                ? tradeRepository.aggregateStatsByTriple()
+                : tradeRepository.aggregateStatsByTripleAndVehicle(vehicle);
         Map<String, TradeAgg> tradeAggByKey = new HashMap<>();
-        for (Object[] row : tradeRepository.aggregateStatsByTriple()) {
+        for (Object[] row : tradeAggRows) {
             String pair = (String) row[0];
             String interval = (String) row[1];
             StrategyType strategy = (StrategyType) row[2];
@@ -52,8 +65,11 @@ public class StatsAggregationService {
             ));
         }
 
+        List<Object[]> openRows = vehicle == null
+                ? positionRepository.countByStatusGroupedByPairIntervalStrategy(OrderStatus.OPEN)
+                : positionRepository.countByStatusGroupedByPairIntervalStrategyAndVehicle(OrderStatus.OPEN, vehicle);
         Map<String, Long> openByKey = new HashMap<>();
-        for (Object[] row : positionRepository.countByStatusGroupedByPairIntervalStrategy(OrderStatus.OPEN)) {
+        for (Object[] row : openRows) {
             String pair = (String) row[0];
             String interval = (String) row[1];
             StrategyType strategy = (StrategyType) row[2];

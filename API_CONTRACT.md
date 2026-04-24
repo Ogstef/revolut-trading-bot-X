@@ -5,6 +5,8 @@
 > **Scope**: only the frontend-facing `/api/**` surface. The `/test/**` controller is dev-only and not part of the contract.
 >
 > **Tier 2 note:** The Consensus and Cross-Interval UI tabs ship without any contract changes — both aggregate existing `/api/signals/current` and `/api/stats/all-triples` responses client-side, plus a 5-way fan-out of `/api/strategies/{name}/trades` for the cross-interval equity chart.
+>
+> **Phase 13 (leverage):** Contract is additive. `TradingVehicle` enum added; `?vehicle=` query param added to strategy-scoped endpoints (default `SPOT`, so existing UI calls work unchanged); `Trade.exitReason` adds `LIQUIDATED`; `BotEventType` adds `POSITION_LIQUIDATED`; `PositionView` / `Trade` / `TradeHistoryEntry` / `TripleStats` / `CurrentSignal` gain leverage fields (nullable for `SPOT`); new `GET /api/vehicles`.
 
 ---
 
@@ -55,8 +57,9 @@ All enums are serialized as their **string name** (Jackson + JPA `@Enumerated(En
 | `OrderSide` | `BUY`, `SELL` |
 | `OrderStatus` | `OPEN`, `CLOSED` |
 | `TradingMode` | `PAPER`, `LIVE` |
-| `Trade.exitReason` (free-form string) | `TP_HIT`, `SL_HIT`, `SIGNAL_EXIT`, `MANUAL` |
-| `BotEventType` | `POSITION_OPENED`, `POSITION_CLOSED`, `CIRCUIT_BREAKER_TRIPPED`, `CIRCUIT_BREAKER_RESET`, `BOT_STOPPED`, `BOT_RESUMED`, `CONFIG_CHANGED` |
+| `TradingVehicle` | `SPOT` (leverage=1), `LEV_3X`, `LEV_5X`, `LEV_10X` |
+| `Trade.exitReason` (free-form string) | `TP_HIT`, `SL_HIT`, `SIGNAL_EXIT`, `MANUAL`, `LIQUIDATED` |
+| `BotEventType` | `POSITION_OPENED`, `POSITION_CLOSED`, `POSITION_LIQUIDATED`, `CIRCUIT_BREAKER_TRIPPED`, `CIRCUIT_BREAKER_RESET`, `BOT_STOPPED`, `BOT_RESUMED`, `CONFIG_CHANGED` |
 | `BotEventSeverity` | `INFO`, `WARNING`, `CRITICAL` |
 
 ### Format conventions
@@ -72,6 +75,7 @@ All enums are serialized as their **string name** (Jackson + JPA `@Enumerated(En
 |-------|------|----------|---------|-------|
 | `pair` | string | optional | `trading.pairs[0]` (`BTC-EUR`) | Filter by trading pair |
 | `interval` | string | optional | `trading.intervals[0]` (`15m`) | Filter by candle interval |
+| `vehicle` | `TradingVehicle` | optional | `SPOT` | Filter by trading vehicle (Phase 13 — leveraged paper trading). Backward-compatible: endpoints that don't accept `?vehicle=` yet simply return all vehicles mixed. |
 | `limit` | int | optional | endpoint-specific (20 for signals, 50 for trades) | Max rows to return |
 | `from` | ISO 8601 `LocalDateTime` | optional | none (no lower bound) | History endpoint only — inclusive lower bound on `executedAt` |
 | `to` | ISO 8601 `LocalDateTime` | optional | none (no upper bound) | History endpoint only — inclusive upper bound on `executedAt` |
@@ -112,6 +116,11 @@ All enums are serialized as their **string name** (Jackson + JPA `@Enumerated(En
 #### `GET /api/intervals`
 - Response: `IntervalInfo[]` — see [`IntervalInfo`](#intervalinfo)
 - UI: fetched once, cached with `staleTime: Infinity`
+
+#### `GET /api/vehicles`
+- Response: `VehicleInfo[]` — `{ name: TradingVehicle, leverage: number, active: boolean }`
+- `active=true` for SPOT always; for `LEV_*X` when `trading.leverage.enabled=true` and the ratio is listed in `trading.leverage.ratios`.
+- UI: fetched once, cached with `staleTime: Infinity`.
 
 ---
 
@@ -268,6 +277,13 @@ TypeScript types live in `revolut-trading-bot-ui/src/api/client.ts`. Java DTOs l
 | `unrealisedPnlPct` | number | no | Percent |
 | `signalReason` | string | no | Reason the position was opened |
 | `openedAt` | string (ISO `LocalDateTime`) | no | Opening timestamp |
+| `vehicle` | `TradingVehicle` | no | `SPOT` / `LEV_3X` / `LEV_5X` / `LEV_10X` |
+| `leverage` | number (int) | no | 1 for SPOT; 3/5/10 for leveraged |
+| `collateral` | number | **yes** | EUR locked as margin (null for SPOT) |
+| `notional` | number | **yes** | `collateral × leverage` (null for SPOT) |
+| `liquidationPrice` | number | **yes** | Null for SPOT |
+| `currentMarginRatio` | number | **yes** | Remaining equity as a fraction of initial collateral (1.0 = intact, 0.0 = liquidated). Null for SPOT. |
+| `fundingFeesAccrued` | number | **yes** | Total perp-style funding accrued on this position (leveraged only) |
 
 ### `Trade`
 
@@ -291,8 +307,13 @@ TypeScript types live in `revolut-trading-bot-ui/src/api/client.ts`. Java DTOs l
 | `entrySlippage` | number | no | Per-side slippage cost at entry |
 | `exitSlippage` | number | no | Per-side slippage cost at exit |
 | `strategyName` | string | no | `StrategyType` enum name |
-| `exitReason` | string | no | `TP_HIT` / `SL_HIT` / `SIGNAL_EXIT` / `MANUAL` |
+| `exitReason` | string | no | `TP_HIT` / `SL_HIT` / `SIGNAL_EXIT` / `MANUAL` / `LIQUIDATED` |
 | `tradingMode` | string | no | `"PAPER"` or `"LIVE"` |
+| `vehicle` | `TradingVehicle` | no | `SPOT` / `LEV_3X` / `LEV_5X` / `LEV_10X` |
+| `leverage` | number (int) | no | 1 for SPOT |
+| `collateral` | number | **yes** | Null for SPOT |
+| `fundingFees` | number | no | Total funding paid over the position's life (0 for SPOT) |
+| `liquidated` | boolean | no | `true` when closed via liquidation |
 | `executedAt` | string (ISO) | no | Entry timestamp |
 | `closedAt` | string (ISO) | **yes** | Null while the trade is open |
 

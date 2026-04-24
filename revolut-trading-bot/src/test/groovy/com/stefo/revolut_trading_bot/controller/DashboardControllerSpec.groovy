@@ -281,7 +281,7 @@ class DashboardControllerSpec extends Specification {
         strategyService.getPositionForStrategy("BTC-EUR", null, StrategyType.EMA_CROSSOVER) >> []
 
         when:
-        def response = controller.strategyPositions(StrategyType.EMA_CROSSOVER, "BTC-EUR", null)
+        def response = controller.strategyPositions(StrategyType.EMA_CROSSOVER, "BTC-EUR", null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -294,7 +294,7 @@ class DashboardControllerSpec extends Specification {
         tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", "15m", StrategyType.MACD, 50) >> []
 
         when:
-        def response = controller.strategyTrades(StrategyType.MACD, 50, null, null)
+        def response = controller.strategyTrades(StrategyType.MACD, 50, null, null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -305,10 +305,10 @@ class DashboardControllerSpec extends Specification {
 
     def "strategyStats() returns stats for the given strategy"() {
         given:
-        tradeService.getStatsForStrategy(null, null, StrategyType.BOLLINGER) >> emptyStats()
+        tradeService.getStatsForStrategy(null, null, StrategyType.BOLLINGER, null) >> emptyStats()
 
         when:
-        def response = controller.strategyStats(StrategyType.BOLLINGER, null, null)
+        def response = controller.strategyStats(StrategyType.BOLLINGER, null, null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -319,14 +319,14 @@ class DashboardControllerSpec extends Specification {
 
     def "strategyPnl() returns PnL breakdown for the strategy"() {
         given:
-        tradeService.getPnlBreakdownForStrategy(null, null, StrategyType.RSI_MOMENTUM) >>
+        tradeService.getPnlBreakdownForStrategy(null, null, StrategyType.RSI_MOMENTUM, null) >>
                 new PnlBreakdown(BigDecimal.valueOf(10), BigDecimal.valueOf(40),
                         BigDecimal.valueOf(100), BigDecimal.valueOf(500),
                         BigDecimal.valueOf(9), BigDecimal.valueOf(38),
                         BigDecimal.valueOf(95), BigDecimal.valueOf(475))
 
         when:
-        def response = controller.strategyPnl(StrategyType.RSI_MOMENTUM, null, null)
+        def response = controller.strategyPnl(StrategyType.RSI_MOMENTUM, null, null, null)
 
         then:
         response.statusCode == HttpStatus.OK

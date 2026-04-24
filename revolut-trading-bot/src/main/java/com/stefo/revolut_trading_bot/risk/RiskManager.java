@@ -4,6 +4,7 @@ import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import com.stefo.revolut_trading_bot.service.BotEventService;
@@ -65,9 +66,10 @@ public class RiskManager {
                                                     StrategyType strategyType) {
         TradingConfig.Risk risk = config.getRisk();
 
-        // 1. Concurrent positions cap — scoped to (pair, interval, strategy)
+        // 1. Concurrent positions cap — scoped to (pair, interval, strategy, SPOT)
         long openPositions = positionRepository
-                .countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, pair, interval, strategyType);
+                .countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(
+                        OrderStatus.OPEN, pair, interval, strategyType, TradingVehicle.SPOT);
 
         if (openPositions >= risk.getMaxConcurrentPositions()) {
             String reason = String.format("Max concurrent positions reached (%d/%d) [pair=%s interval=%s strategy=%s]",
@@ -76,10 +78,11 @@ public class RiskManager {
             return RiskValidationResult.rejected(reason);
         }
 
-        // 2. Daily loss circuit breaker
+        // 2. Daily loss circuit breaker — SPOT only (leveraged PnL has its own balance gate)
         LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
         BigDecimal dailyPnl = tradeRepository
-                .sumPnlSinceAndPairAndIntervalAndStrategy(startOfDay, pair, interval, strategyType);
+                .sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(
+                        startOfDay, pair, interval, strategyType, TradingVehicle.SPOT);
 
         BigDecimal maxAllowedLoss = availableBalance
                 .multiply(risk.getMaxDailyLossPct())
@@ -139,10 +142,12 @@ public class RiskManager {
                                                StrategyType strategyType) {
         LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
         BigDecimal dailyPnl = tradeRepository
-                .sumPnlSinceAndPairAndIntervalAndStrategy(startOfDay, pair, interval, strategyType);
+                .sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(
+                        startOfDay, pair, interval, strategyType, TradingVehicle.SPOT);
 
         long openPositions = positionRepository
-                .countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, pair, interval, strategyType);
+                .countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(
+                        OrderStatus.OPEN, pair, interval, strategyType, TradingVehicle.SPOT);
 
         int consecutive = countConsecutiveLosses(pair, interval, strategyType);
 
@@ -203,12 +208,14 @@ public class RiskManager {
             dailyPnls.put(keyOf(row), (BigDecimal) row[3]);
         }
 
-        // Query 3: today's trades → consecutive-loss streaks in memory (resets daily)
+        // Query 3: today's trades → consecutive-loss streaks in memory (resets daily).
+        // Leveraged trades are skipped — spot circuit breakers only care about spot streaks.
         int maxStreak = config.getRisk().getMaxConsecutiveLosses();
         LocalDateTime streakWindowStart = startOfDay;
         Map<Key, Integer> consecutiveLosses = new HashMap<>();
         Map<Key, Boolean> streakClosed = new HashMap<>();
         for (Trade trade : tradeRepository.findByExecutedAtAfterOrderByExecutedAtDesc(streakWindowStart)) {
+            if (trade.getVehicle() != TradingVehicle.SPOT) continue;
             Key key = new Key(trade.getPair(), trade.getInterval(), trade.getStrategyName());
             if (Boolean.TRUE.equals(streakClosed.get(key))) {
                 continue;
@@ -281,7 +288,8 @@ public class RiskManager {
         int limit = config.getRisk().getMaxConsecutiveLosses();
         LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
         List<Trade> recent = tradeRepository
-                .findRecentTradesByPairAndIntervalAndStrategy(pair, interval, strategyType, limit);
+                .findRecentTradesByPairAndIntervalAndStrategyAndVehicle(
+                        pair, interval, strategyType, TradingVehicle.SPOT, limit);
 
         int count = 0;
         for (Trade trade : recent) {

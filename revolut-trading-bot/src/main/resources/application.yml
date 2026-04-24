@@ -101,6 +101,19 @@ trading:
     max-consecutive-losses: 15
     take-profit-pct: 12
     stop-loss-pct: 4
+  leverage:
+    enabled: true                    # Phase 3 fan-out landed — leveraged portfolios active
+    ratios: [3, 5, 10]               # LEV_3X, LEV_5X, LEV_10X
+    pairs: [BTC-EUR]                 # subset of trading.pairs
+    intervals: [60, 240, 1440]       # subset of trading.intervals (1h, 4h, 1d)
+    collateral-per-strategy: 1000.00 # EUR per (pair, strategy, ratio) — isolated from spot
+    maintenance-margin-pct: 0.5      # % notional at which liquidation triggers
+    funding-rate-per-8h: 0.0001      # 0.01% of notional per 8h (flat model)
+    max-concurrent-positions: 2      # tighter than spot's 3
+    max-position-pct: 100            # 100% of collateral per trade (leverage is the multiplier)
+    allow-shorts: true
+    excluded-strategies: [PARABOLIC_SAR, MACD]  # fee-victim strategies — block new leveraged opens, SPOT unaffected
+    cooldown-minutes: 30             # block re-opens on same (pair, interval, strategy, vehicle) after a close
 
 revolut:
   api:

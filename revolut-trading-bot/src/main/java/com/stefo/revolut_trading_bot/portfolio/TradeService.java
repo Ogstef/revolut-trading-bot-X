@@ -4,6 +4,7 @@ import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.model.dto.PnlBreakdown;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -131,11 +132,17 @@ public class TradeService {
      * Strategy-scoped statistics filtered to a specific (pair, interval, strategy).
      */
     public TradingStats getStatsForStrategy(String pair, String interval, StrategyType strategyName) {
+        return getStatsForStrategy(pair, interval, strategyName, null);
+    }
+
+    /** Vehicle-scoped variant — when {@code vehicle} is null, aggregates across all vehicles. */
+    public TradingStats getStatsForStrategy(String pair, String interval, StrategyType strategyName, TradingVehicle vehicle) {
         String effectivePair     = pair != null ? pair : config.primaryPair();
         String effectiveInterval = interval != null ? interval : config.primaryInterval();
 
-        List<Trade> closed = tradeRepository
-                .findByPairAndIntervalAndStrategyNameOrderByExecutedAtDesc(effectivePair, effectiveInterval, strategyName)
+        List<Trade> closed = (vehicle == null
+                ? tradeRepository.findByPairAndIntervalAndStrategyNameOrderByExecutedAtDesc(effectivePair, effectiveInterval, strategyName)
+                : tradeRepository.findByPairAndIntervalAndStrategyNameAndVehicleOrderByExecutedAtDesc(effectivePair, effectiveInterval, strategyName, vehicle))
                 .stream()
                 .filter(t -> t.getPnl() != null)
                 .toList();
@@ -190,6 +197,11 @@ public class TradeService {
      * Strategy-scoped PnL breakdown filtered to a specific (pair, interval, strategy).
      */
     public PnlBreakdown getPnlBreakdownForStrategy(String pair, String interval, StrategyType strategyName) {
+        return getPnlBreakdownForStrategy(pair, interval, strategyName, null);
+    }
+
+    /** Vehicle-scoped variant — when {@code vehicle} is null, sums across all vehicles. */
+    public PnlBreakdown getPnlBreakdownForStrategy(String pair, String interval, StrategyType strategyName, TradingVehicle vehicle) {
         String effectivePair     = pair != null ? pair : config.primaryPair();
         String effectiveInterval = interval != null ? interval : config.primaryInterval();
 
@@ -198,15 +210,26 @@ public class TradeService {
         LocalDateTime startOfMonth = LocalDate.now().withDayOfMonth(1).atStartOfDay();
         LocalDateTime epoch        = LocalDateTime.of(2000, 1, 1, 0, 0);
 
-        BigDecimal daily   = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
-        BigDecimal weekly  = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
-        BigDecimal monthly = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
-        BigDecimal allTime = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
-
-        BigDecimal dailyNet   = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
-        BigDecimal weeklyNet  = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
-        BigDecimal monthlyNet = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
-        BigDecimal allTimeNet = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
+        BigDecimal daily, weekly, monthly, allTime, dailyNet, weeklyNet, monthlyNet, allTimeNet;
+        if (vehicle == null) {
+            daily   = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
+            weekly  = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
+            monthly = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
+            allTime = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
+            dailyNet   = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfDay,   effectivePair, effectiveInterval, strategyName);
+            weeklyNet  = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfWeek,  effectivePair, effectiveInterval, strategyName);
+            monthlyNet = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(startOfMonth, effectivePair, effectiveInterval, strategyName);
+            allTimeNet = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategy(epoch,        effectivePair, effectiveInterval, strategyName);
+        } else {
+            daily   = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(startOfDay,   effectivePair, effectiveInterval, strategyName, vehicle);
+            weekly  = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(startOfWeek,  effectivePair, effectiveInterval, strategyName, vehicle);
+            monthly = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(startOfMonth, effectivePair, effectiveInterval, strategyName, vehicle);
+            allTime = tradeRepository.sumPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(epoch,        effectivePair, effectiveInterval, strategyName, vehicle);
+            dailyNet   = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(startOfDay,   effectivePair, effectiveInterval, strategyName, vehicle);
+            weeklyNet  = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(startOfWeek,  effectivePair, effectiveInterval, strategyName, vehicle);
+            monthlyNet = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(startOfMonth, effectivePair, effectiveInterval, strategyName, vehicle);
+            allTimeNet = tradeRepository.sumNetPnlClosedSinceAndPairAndIntervalAndStrategyAndVehicle(epoch,        effectivePair, effectiveInterval, strategyName, vehicle);
+        }
 
         return new PnlBreakdown(
                 daily.setScale(2, RoundingMode.HALF_UP),

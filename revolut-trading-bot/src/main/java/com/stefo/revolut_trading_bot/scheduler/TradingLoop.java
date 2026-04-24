@@ -2,11 +2,17 @@ package com.stefo.revolut_trading_bot.scheduler;
 
 import com.stefo.revolut_trading_bot.alert.AlertService;
 import com.stefo.revolut_trading_bot.config.TradingConfig;
+import com.stefo.revolut_trading_bot.execution.LeveragedPaperTradingService;
 import com.stefo.revolut_trading_bot.execution.OrderExecutionService;
 import com.stefo.revolut_trading_bot.market.MarketDataClient;
 import com.stefo.revolut_trading_bot.market.MarketDataService;
 import com.stefo.revolut_trading_bot.model.dto.BalanceResponse;
+import com.stefo.revolut_trading_bot.model.entity.Position;
+import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
+import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
+import com.stefo.revolut_trading_bot.portfolio.VehicleBalanceService;
+import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
 import com.stefo.revolut_trading_bot.strategy.Signal;
 import com.stefo.revolut_trading_bot.strategy.SignalEngine;
@@ -16,6 +22,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -40,14 +48,17 @@ public class TradingLoop {
 
     private static final String MODE_PAPER = "PAPER";
 
-    private final SignalEngine          signalEngine;
-    private final OrderExecutionService orderExecutionService;
-    private final RiskManager           riskManager;
-    private final MarketDataService     marketDataService;
-    private final MarketDataClient      marketDataClient;
-    private final TradingConfig         tradingConfig;
-    private final BotStateService       botStateService;
-    private final AlertService          alertService;
+    private final SignalEngine                 signalEngine;
+    private final OrderExecutionService        orderExecutionService;
+    private final LeveragedPaperTradingService leveragedPaperTradingService;
+    private final PositionRepository           positionRepository;
+    private final RiskManager                  riskManager;
+    private final MarketDataService            marketDataService;
+    private final MarketDataClient             marketDataClient;
+    private final TradingConfig                tradingConfig;
+    private final BotStateService              botStateService;
+    private final AlertService                 alertService;
+    private final VehicleBalanceService        vehicleBalanceService;
 
     @Scheduled(fixedDelayString = "#{${trading.polling-interval-seconds:30} * 1000}")
     public void run() {
@@ -76,42 +87,54 @@ public class TradingLoop {
                 tradingConfig.getIntervals().size(),
                 allSignals.size());
 
-        // Step 2: per-cycle risk snapshot — 3 aggregate queries replace ~3 queries per signal
+        // Step 2: per-cycle SPOT risk snapshot — 3 aggregate queries replace ~3 queries per signal
         RiskManager.CycleSnapshot riskSnapshot = riskManager.snapshotAll();
 
-        // Step 3: group signals by (pair, interval) for clean logging
+        // Step 3: accrue funding on ALL open leveraged positions once per cycle
+        accrueFundingOnAllLeveraged();
+
+        // Step 4: group signals by (pair, interval)
         Map<String, Map<String, List<Signal>>> signalsByPairAndInterval = allSignals.stream()
                 .collect(Collectors.groupingBy(Signal::pair,
                         Collectors.groupingBy(Signal::interval)));
 
-        // Step 4: per-pair, per-interval, per-strategy execution — fully isolated
+        // Step 5: per-(pair, interval, strategy) execution — fires SPOT always, then each active
+        // leveraged vehicle if leverage is enabled and the (pair, interval) is in the leveraged subset.
+        List<TradingVehicle> leveragedVehicles = activeLeveragedVehicles();
         signalsByPairAndInterval.forEach((pair, byInterval) -> {
             BigDecimal currentPrice = marketDataService.getCurrentPriceForPair(pair);
             log.info("[{}] Price: {}", pair, currentPrice);
             byInterval.forEach((interval, signals) -> {
                 log.debug("[{}][{}] Processing {} signals", pair, interval, signals.size());
-                signals.forEach(signal -> runStrategyExecution(signal, currentPrice, riskSnapshot));
+                signals.forEach(signal -> {
+                    runSpotExecution(signal, currentPrice, riskSnapshot);
+                    if (isLeveragedTarget(pair, interval)) {
+                        for (TradingVehicle vehicle : leveragedVehicles) {
+                            runLeveragedExecution(signal, vehicle, currentPrice);
+                        }
+                    }
+                });
             });
         });
 
         log.info("══════════ Trading cycle end ══════════");
     }
 
-    private void runStrategyExecution(Signal signal, BigDecimal currentPrice,
-                                      RiskManager.CycleSnapshot riskSnapshot) {
+    private void runSpotExecution(Signal signal, BigDecimal currentPrice,
+                                  RiskManager.CycleSnapshot riskSnapshot) {
         String pair              = signal.pair();
         String interval          = signal.interval();
         StrategyType strategyName = signal.strategyType();
         log.info("[{}][{}][{}] Signal: {} | reason: {}", pair, interval, strategyName, signal.type(), signal.reason());
 
-        // Monitor TP/SL only for this (pair, interval, strategy)'s open positions
-        orderExecutionService.monitorPositions(currentPrice, pair, interval, strategyName);
+        // Monitor TP/SL only for this (pair, interval, strategy, SPOT)'s open positions
+        orderExecutionService.monitorPositionsForVehicle(currentPrice, pair, interval, strategyName, TradingVehicle.SPOT);
 
         // Resolve balance — shared per (pair, strategy), NOT split by interval
         BigDecimal balance = resolveBalanceForStrategy(pair, strategyName);
         log.info("[{}][{}][{}] Balance: {} EUR", pair, interval, strategyName, balance);
 
-        // Read risk state from the per-cycle snapshot — no per-signal DB round-trip
+        // Read risk state from the per-cycle SPOT snapshot — no per-signal DB round-trip
         RiskManager.RiskStatus riskStatus =
                 riskManager.statusFromSnapshot(riskSnapshot, balance, pair, interval, strategyName);
         log.info("[{}][{}][{}] Risk — openPositions: {} | dailyPnl: {} | consecutiveLosses: {} | circuitBreaker: {}",
@@ -119,7 +142,7 @@ public class TradingLoop {
                 riskStatus.consecutiveLosses(), riskStatus.anyCircuitBreakerTripped());
 
         if (riskStatus.anyCircuitBreakerTripped()) {
-            log.warn("[{}][{}][{}] ⚠ Circuit breaker active — skipping trade execution", pair, interval, strategyName);
+            log.warn("[{}][{}][{}] ⚠ Circuit breaker active — skipping SPOT trade execution", pair, interval, strategyName);
             alertService.circuitBreakerTripped(pair + "/" + interval + "/" + strategyName
                     + " openPositions=" + riskStatus.openPositions()
                     + " dailyPnl=" + riskStatus.dailyPnl()
@@ -127,7 +150,52 @@ public class TradingLoop {
             return;
         }
 
-        orderExecutionService.executeSignal(signal, balance, currentPrice);
+        orderExecutionService.executeSignalForVehicle(signal, TradingVehicle.SPOT, balance, currentPrice);
+    }
+
+    private void runLeveragedExecution(Signal signal, TradingVehicle vehicle, BigDecimal currentPrice) {
+        String pair              = signal.pair();
+        String interval          = signal.interval();
+        StrategyType strategyName = signal.strategyType();
+
+        // Monitor liquidation / TP / SL for this quadruple first
+        orderExecutionService.monitorPositionsForVehicle(currentPrice, pair, interval, strategyName, vehicle);
+
+        // Balance-gated; no circuit-breaker for leveraged vehicles in this phase
+        BigDecimal available = vehicleBalanceService.available(pair, strategyName, vehicle);
+        log.debug("[{}][{}][{}][{}] Leveraged balance: {} EUR", pair, interval, strategyName, vehicle, available);
+
+        orderExecutionService.executeSignalForVehicle(signal, vehicle, available, currentPrice);
+    }
+
+    private void accrueFundingOnAllLeveraged() {
+        if (!tradingConfig.getLeverage().isEnabled()) return;
+        LocalDateTime now = LocalDateTime.now();
+        List<Position> openLeveraged = new ArrayList<>();
+        for (TradingVehicle v : activeLeveragedVehicles()) {
+            openLeveraged.addAll(positionRepository.findByStatusAndVehicle(OrderStatus.OPEN, v));
+        }
+        if (openLeveraged.isEmpty()) return;
+        log.debug("Accruing funding on {} open leveraged position(s)", openLeveraged.size());
+        for (Position p : openLeveraged) {
+            leveragedPaperTradingService.accrueFunding(p, now);
+        }
+    }
+
+    private List<TradingVehicle> activeLeveragedVehicles() {
+        TradingConfig.Leverage lev = tradingConfig.getLeverage();
+        if (!lev.isEnabled()) return List.of();
+        return lev.getRatios().stream()
+                .map(TradingVehicle::forLeverage)
+                .collect(Collectors.toList());
+    }
+
+    private boolean isLeveragedTarget(String pair, String interval) {
+        TradingConfig.Leverage lev = tradingConfig.getLeverage();
+        if (!lev.isEnabled()) return false;
+        if (!lev.getPairs().contains(pair)) return false;
+        int minutes = TradingConfig.intervalMinutes(interval);
+        return lev.getIntervals().contains(minutes);
     }
 
     /**
