@@ -121,14 +121,13 @@ sentiment:
     auth-token: ${SENTIMENT_INGEST_TOKEN:}   # shared secret — scraper presents this as Bearer token; empty = endpoint disabled
     max-batch-size: 200                      # ingest rejects oversized batches with 413
   reddit-filters:                        # applied server-side before a post is sent to the Haiku classifier
-    # Tuned 2026-04-26: min-score 5→2, min-comments 3→0, max-age 24→72.
-    # Reddit's /new endpoint returns posts spanning multiple days on slower subs, so a 24h
-    # cap dropped 80%+. /new is unreliable as a "fresh feed" for these subs anyway —
-    # well-engaged older posts still reflect real recent sentiment.
-    # €3/mo cap protects against runaway cost.
-    min-score:    2                      # upvotes needed before classifying
-    min-comments: 0
-    max-age-hours: 72
+    # Tuned 2026-04-26 (after Mac-tunnel proxy enabled JSON-based scraping with real engagement metrics):
+    # /new returns very fresh posts — most have score=1, comments=0 because they haven't been
+    # voted on yet. min-score≥3 + min-comments≥1 still filters junk while letting fresh-but-
+    # engaging posts through. Worth re-tightening if Haiku spend trends high.
+    min-score:    3                      # upvotes — real value from Reddit JSON
+    min-comments: 1                      # comments — real value from Reddit JSON
+    max-age-hours: 72                    # keep generous; /new spans multiple days on slower subs
   classifier:
     anthropic-api-key: ${ANTHROPIC_API_KEY:}
     model: claude-haiku-4-5-20251001
