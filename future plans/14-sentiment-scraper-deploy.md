@@ -47,33 +47,42 @@ New for Phase 14:
 
 ## Step-by-step plan
 
-### Step 1 — Local commits (10 min)
+### Step 1 — Local commits (THREE separate repos)
 
-Group the unstaged work into three commits to keep the history scannable.
+The codebase is now spread across **three** repos. Commit + push each in turn.
+
+**1a. Backend monorepo** (Ogstef/revolut-trading-bot — the main one):
 
 ```bash
 cd /Users/stefanosgeorgiou/IdeaProjects/revolut-trading-bot-X
-git status        # confirm what you have
-
-# 1) backend + UI + docs (one feature, three modules)
-git add revolut-trading-bot/src \
-        revolut-trading-bot/CLAUDE.md \
-        revolut-trading-bot-ui/src \
-        revolut-trading-bot-ui/CLAUDE.md \
-        API_CONTRACT.md \
-        CLAUDE.md
-git commit -m "Add 3 sentiment strategies + ingest pipeline (Phase 14)"
-
-# 2) scraper microservice
-git add scrapers/
-git commit -m "Add sentiment-scraper Python microservice"
-
-# 3) plan + future-plans entry
-git add "future plans/" .claude .mcp.json
-git commit -m "Add Phase 14 sentiment plan + deploy plan"
+# Already done locally:
+#   913dcf8  Add 3 sentiment strategies + ingest pipeline (Phase 14)
+#   4258d14  Add Phase 14 sentiment plans + scraper-repo .gitignore
+git push origin develop
 ```
 
-**Don't push yet** — VPS env vars need to be set first or the backend will fail health-check on first start.
+**1b. UI repo** (Ogstef/revolut-bot-ui — separate):
+
+```bash
+cd /Users/stefanosgeorgiou/IdeaProjects/revolut-trading-bot-X/revolut-trading-bot-ui
+git status     # should show: api/sentiment.ts, hooks/useSentiment.ts,
+               # components/SentimentWidget.tsx, layout/Header.tsx, utils/strategyMeta.ts, api/client.ts
+git add src
+git commit -m "Add sentiment widget + 3 strategies in metadata (Phase 14)"
+git push
+```
+
+**1c. Scraper repo** (Ogstef/reddit-crypto-scraper — newly created):
+
+```bash
+cd /Users/stefanosgeorgiou/IdeaProjects/revolut-trading-bot-X/scrapers
+# Should already have an initial commit on `main` and remote configured.
+# If you've made local changes since:
+git status
+git push origin main
+```
+
+**Don't run /deploy-all yet** — VPS env vars + scraper systemd setup need to be in place first.
 
 ### Step 2 — VPS secrets (manual, 10 min — see "Manual secrets setup" section below)
 
@@ -81,16 +90,15 @@ Done out-of-band by SSHing into the VPS. Follow that section first.
 
 ### Step 3 — Backend + UI deploy (existing pipeline, 5 min)
 
-```bash
-# From local Mac, push develop and merge to deployed-version
-git push origin develop
+After step 1 pushes are done and step 2 secrets are in place:
 
+```bash
 # Use the existing /commit-and-deploy or /deploy-all skill
 /deploy-all
 ```
 
 That:
-- Merges `develop` → `deployed-version` for both repos
+- Merges `develop` → `deployed-version` for backend + UI repos (both are configured in the deploy skill)
 - Pushes both
 - VPS pulls each repo's `deployed-version`, rebuilds, restarts systemd unit
 - **Flyway auto-applies V10** on Spring Boot startup — watch backend log for:
@@ -98,17 +106,23 @@ That:
   Migrating schema "trading" to version "10 - add sentiment and budget tables"
   ```
 
+**The scraper is a third repo and is NOT covered by /deploy-all** — its setup is step 4 below.
+
 ### Step 4 — Scraper deploy (one-time setup, 30 min)
 
-The scraper has never been deployed before — this is a manual sequence that automates after this run.
+The scraper lives in a **separate GitHub repo**: `Ogstef/reddit-crypto-scraper`. Local path is `revolut-trading-bot-X/scrapers/` but it has its own `.git/`. The backend monorepo's `.gitignore` now excludes it.
+
+First-time clone on the VPS:
 
 ```bash
 ssh stef@204.168.228.158
-cd /opt/revolut-trading-bot
-git pull        # pulls scrapers/ folder
+sudo mkdir -p /opt/reddit-crypto-scraper
+sudo chown stef:stef /opt/reddit-crypto-scraper
+cd /opt
+git clone https://github.com/Ogstef/reddit-crypto-scraper.git
 
 # Build the Docker image
-cd scrapers/sentiment-scraper
+cd /opt/reddit-crypto-scraper/sentiment-scraper
 sudo docker build -t sentiment-scraper:latest .
 
 # Install the env file (separate from backend's, but tokens must match!)
@@ -127,13 +141,22 @@ SCRAPER_REDDIT_SUBREDDITS=Bitcoin,ethereum,solana,CryptoMarkets
 SCRAPER_CRYPTOPANIC_CURRENCIES=
 ```
 
-Install the systemd unit:
+Install the systemd unit (path adjusted for the standalone repo location):
 
 ```bash
-sudo cp systemd/sentiment-scraper.service /etc/systemd/system/
+sudo cp /opt/reddit-crypto-scraper/sentiment-scraper/systemd/sentiment-scraper.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now sentiment-scraper
 sudo systemctl status sentiment-scraper       # should be active (running)
+```
+
+For future updates (after step 1c pushes more commits to `main`):
+
+```bash
+ssh stef@204.168.228.158
+cd /opt/reddit-crypto-scraper && git pull
+cd sentiment-scraper && sudo docker build -t sentiment-scraper:latest .
+sudo systemctl restart sentiment-scraper
 ```
 
 Watch the first cycle:
@@ -319,7 +342,15 @@ After 24h:
 
 ## Files this plan affects
 
-### Already in the local repo (waiting for commit)
+### Repo layout (3 GitHub repos, 3 deploy paths)
+
+| Repo | Local path | VPS path | Deploy via |
+|------|------------|----------|------------|
+| `Ogstef/revolut-trading-bot` (backend) | `revolut-trading-bot-X/revolut-trading-bot/` | `/opt/revolut-trading-bot/` | `/deploy-backend` (or `/deploy-all`) |
+| `Ogstef/revolut-bot-ui` (UI) | `revolut-trading-bot-X/revolut-trading-bot-ui/` | (nginx web root) | `/deploy-ui` (or `/deploy-all`) |
+| `Ogstef/reddit-crypto-scraper` (scraper) | `revolut-trading-bot-X/scrapers/` | `/opt/reddit-crypto-scraper/` | manual `git pull` + `docker build` + `systemctl restart` |
+
+### Already in the backend monorepo (committed locally, waiting to push)
 
 - `revolut-trading-bot/src/main/resources/application.yml` — `sentiment:` block, tuned filters
 - `revolut-trading-bot/src/main/resources/db/migration/V10__add_sentiment_and_budget_tables.sql`
