@@ -4,7 +4,6 @@ import com.stefo.revolut_trading_bot.config.TradingConfig;
 import com.stefo.revolut_trading_bot.model.dto.TripleStats;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import com.stefo.revolut_trading_bot.repository.TradeRepository;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
@@ -32,20 +31,8 @@ public class StatsAggregationService {
     private final RiskManager riskManager;
 
     public List<TripleStats> getAllTripleStats() {
-        return getAllTripleStats(null);
-    }
-
-    /**
-     * Per-triple stats filtered to a specific vehicle. When {@code vehicle} is null, the
-     * original behaviour is preserved: trade aggregates across all vehicles, open-position
-     * counts filtered to SPOT (matches existing leaderboard semantics).
-     */
-    public List<TripleStats> getAllTripleStats(TradingVehicle vehicle) {
-        List<Object[]> tradeAggRows = vehicle == null
-                ? tradeRepository.aggregateStatsByTriple()
-                : tradeRepository.aggregateStatsByTripleAndVehicle(vehicle);
         Map<String, TradeAgg> tradeAggByKey = new HashMap<>();
-        for (Object[] row : tradeAggRows) {
+        for (Object[] row : tradeRepository.aggregateStatsByTriple()) {
             String pair = (String) row[0];
             String interval = (String) row[1];
             StrategyType strategy = (StrategyType) row[2];
@@ -65,11 +52,8 @@ public class StatsAggregationService {
             ));
         }
 
-        List<Object[]> openRows = vehicle == null
-                ? positionRepository.countByStatusGroupedByPairIntervalStrategy(OrderStatus.OPEN)
-                : positionRepository.countByStatusGroupedByPairIntervalStrategyAndVehicle(OrderStatus.OPEN, vehicle);
         Map<String, Long> openByKey = new HashMap<>();
-        for (Object[] row : openRows) {
+        for (Object[] row : positionRepository.countByStatusGroupedByPairIntervalStrategy(OrderStatus.OPEN)) {
             String pair = (String) row[0];
             String interval = (String) row[1];
             StrategyType strategy = (StrategyType) row[2];
@@ -158,11 +142,6 @@ public class StatsAggregationService {
         return pair + "|" + interval + "|" + strategy.name();
     }
 
-    /**
-     * JPQL AVG() returns Double regardless of column type; SUM()/MAX()/MIN() on BigDecimal
-     * columns usually return BigDecimal, but COALESCE(..., 0) can downgrade to Number. Normalise
-     * every numeric slot through this helper so the mapping works on any Hibernate/PG combo.
-     */
     private static BigDecimal toBd(Object o) {
         if (o == null) return BigDecimal.ZERO;
         if (o instanceof BigDecimal bd) return bd;

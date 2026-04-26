@@ -3,7 +3,6 @@ package com.stefo.revolut_trading_bot.repository;
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -45,41 +44,16 @@ public interface PositionRepository extends JpaRepository<Position, Long> {
 
     List<Position> findByPairAndIntervalAndStatus(String pair, String interval, OrderStatus status);
 
-    // ─── Vehicle-scoped queries (Phase 13 — leveraged trading) ────────────────
-
-    /** Open positions for a specific (pair, interval, strategy, vehicle) — used by monitorPositions. */
-    List<Position> findByStatusAndPairAndIntervalAndStrategyNameAndVehicle(
-            OrderStatus status, String pair, String interval, StrategyType strategyName, TradingVehicle vehicle);
-
-    /** Open-position count for a specific (pair, interval, strategy, vehicle) — used by leveraged balance gate. */
-    long countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(
-            OrderStatus status, String pair, String interval, StrategyType strategyName, TradingVehicle vehicle);
-
-    /** All open positions for a specific vehicle — used to iterate leveraged positions for funding accrual. */
-    List<Position> findByStatusAndVehicle(OrderStatus status, TradingVehicle vehicle);
-
     /**
      * Aggregates open-position counts grouped by (pair, interval, strategy) in a single query —
-     * backs the per-cycle SPOT risk snapshot. Filters to SPOT so leveraged positions don't
-     * count against spot concurrency caps.
+     * backs the per-cycle risk snapshot.
      * Returns rows: [String pair, String interval, StrategyType strategyName, Long count].
      */
     @Query("""
             SELECT p.pair, p.interval, p.strategyName, COUNT(p)
             FROM Position p
-            WHERE p.status = :status AND p.vehicle = com.stefo.revolut_trading_bot.model.enums.TradingVehicle.SPOT
+            WHERE p.status = :status
             GROUP BY p.pair, p.interval, p.strategyName
             """)
     List<Object[]> countByStatusGroupedByPairIntervalStrategy(@Param("status") OrderStatus status);
-
-    /** Same shape as the SPOT-filtered grouping above, but for a specific leveraged vehicle. */
-    @Query("""
-            SELECT p.pair, p.interval, p.strategyName, COUNT(p)
-            FROM Position p
-            WHERE p.status = :status AND p.vehicle = :vehicle
-            GROUP BY p.pair, p.interval, p.strategyName
-            """)
-    List<Object[]> countByStatusGroupedByPairIntervalStrategyAndVehicle(
-            @Param("status") OrderStatus status,
-            @Param("vehicle") TradingVehicle vehicle);
 }

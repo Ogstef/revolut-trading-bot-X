@@ -5,7 +5,6 @@ import com.stefo.revolut_trading_bot.model.dto.PositionView;
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.repository.PositionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -30,21 +29,14 @@ public class PositionService {
     public List<PositionView> getPositions(String pair) {
         List<Position> positions = getPairs(pair);
         return getViews(positions);
-
     }
+
     public List<Position> getOpenPositions(String effectivePair, StrategyType strategyType) {
         return repository.findByStatusAndPairAndStrategyName(OrderStatus.OPEN, effectivePair, strategyType);
     }
 
     public List<Position> getOpenPositions(String effectivePair, String interval, StrategyType strategyType) {
         return repository.findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, effectivePair, interval, strategyType);
-    }
-
-    /** Vehicle-scoped variant of {@link #getOpenPositions(String, String, StrategyType)}. */
-    public List<Position> getOpenPositions(String effectivePair, String interval, StrategyType strategyType, TradingVehicle vehicle) {
-        if (vehicle == null) return getOpenPositions(effectivePair, interval, strategyType);
-        return repository.findByStatusAndPairAndIntervalAndStrategyNameAndVehicle(
-                OrderStatus.OPEN, effectivePair, interval, strategyType, vehicle);
     }
 
     private List<PositionView> getViews(List<Position> positions) {
@@ -57,21 +49,11 @@ public class PositionService {
     }
 
     public List<PositionView> getAllLiveViews() {
-        return getAllLiveViews(null);
-    }
-
-    /** Vehicle-scoped variant — when null, returns every open position regardless of vehicle. */
-    public List<PositionView> getAllLiveViews(TradingVehicle vehicle) {
-        List<Position> positions = vehicle == null
-                ? repository.findByStatus(OrderStatus.OPEN)
-                : repository.findByStatusAndVehicle(OrderStatus.OPEN, vehicle);
-        return getViews(positions);
+        return getViews(repository.findByStatus(OrderStatus.OPEN));
     }
 
     public List<Position> getPairs(String pair) {
         return pair != null ? repository.findByPairAndStatus(pair, OrderStatus.OPEN)
                 : repository.findByStatus(OrderStatus.OPEN);
-
     }
-
 }

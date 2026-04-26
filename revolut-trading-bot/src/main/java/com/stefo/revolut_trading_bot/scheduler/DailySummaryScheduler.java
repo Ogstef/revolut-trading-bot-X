@@ -65,7 +65,6 @@ public class DailySummaryScheduler {
     private DailySummaryData buildSummaryData() {
         LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
 
-        // Trades closed today
         List<Trade> closedToday = tradeRepository.findClosedTradesSince(startOfDay);
         int wins = (int) closedToday.stream()
                 .filter(t -> t.getPnl().signum() > 0)
@@ -78,7 +77,6 @@ public class DailySummaryScheduler {
                 .multiply(BigDecimal.valueOf(100))
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // Daily gross + net computed from the same closedToday list so all three metrics are consistent
         BigDecimal dailyGross = closedToday.stream()
                 .map(t -> safe(t.getPnl()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
@@ -89,10 +87,8 @@ public class DailySummaryScheduler {
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // Weekly / all-time from the service (closedAt-based after repository fix)
         PnlBreakdown pnl = tradeService.getPnlBreakdown();
 
-        // Fee aggregates for trades closed today
         BigDecimal dailyFees = closedToday.stream()
                 .map(t -> safe(t.getEntryFee()).add(safe(t.getExitFee())))
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
@@ -103,47 +99,21 @@ public class DailySummaryScheduler {
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // Open positions
         int openPositions = (int) positionRepository.countByStatus(OrderStatus.OPEN);
 
-        // Circuit breakers — use snapshotAll (3 DB queries) then check each triple in-memory
         int cbActive = countActiveCircuitBreakers();
 
-        // Top winners by gross PnL (already sorted DESC by the query)
         List<DailySummaryData.TopMover> topWinners = closedToday.stream()
                 .filter(t -> t.getPnl().signum() > 0)
                 .limit(3)
                 .map(this::toMover)
                 .toList();
 
-        // Top losers by gross PnL (worst first)
         List<DailySummaryData.TopMover> topLosers = closedToday.stream()
                 .filter(t -> t.getPnl().signum() <= 0)
                 .sorted(Comparator.comparing(Trade::getPnl))
                 .limit(3)
                 .map(this::toMover)
-                .toList();
-
-        // Per-vehicle leverage aggregates — one row per distinct leveraged vehicle
-        // that had any closed trade today. Empty when leverage is off or inactive.
-        List<DailySummaryData.VehicleAggregate> leverageOverview = closedToday.stream()
-                .filter(t -> t.getVehicle() != null
-                        && t.getVehicle() != com.stefo.revolut_trading_bot.model.enums.TradingVehicle.SPOT)
-                .collect(java.util.stream.Collectors.groupingBy(Trade::getVehicle))
-                .entrySet().stream()
-                .map(e -> {
-                    var vehicle = e.getKey();
-                    var trades = e.getValue();
-                    int w = (int) trades.stream().filter(t -> safe(t.getNetPnl()).signum() > 0).count();
-                    int l = trades.size() - w;
-                    int liq = (int) trades.stream().filter(Trade::isLiquidated).count();
-                    BigDecimal gross = trades.stream().map(t -> safe(t.getPnl()))
-                            .reduce(BigDecimal.ZERO, BigDecimal::add).setScale(2, RoundingMode.HALF_UP);
-                    BigDecimal net   = trades.stream().map(t -> safe(t.getNetPnl()))
-                            .reduce(BigDecimal.ZERO, BigDecimal::add).setScale(2, RoundingMode.HALF_UP);
-                    return new DailySummaryData.VehicleAggregate(vehicle, trades.size(), w, l, liq, gross, net);
-                })
-                .sorted(Comparator.comparing(agg -> agg.vehicle().name()))
                 .toList();
 
         return new DailySummaryData(
@@ -164,8 +134,7 @@ public class DailySummaryScheduler {
                 cbActive,
                 topWinners,
                 topLosers,
-                tradingConfig.getMode(),
-                leverageOverview
+                tradingConfig.getMode()
         );
     }
 

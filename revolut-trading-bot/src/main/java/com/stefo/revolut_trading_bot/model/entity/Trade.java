@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.stefo.revolut_trading_bot.model.enums.OrderSide;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.model.enums.TradingMode;
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -90,31 +89,10 @@ public class Trade {
     @Builder.Default
     private TradingMode tradingMode = TradingMode.PAPER;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 10)
-    @Builder.Default
-    private TradingVehicle vehicle = TradingVehicle.SPOT;
-
-    @Column(nullable = false)
-    @Builder.Default
-    private short leverage = 1;
-
-    @Column(precision = 18, scale = 8)
-    private BigDecimal collateral;
-
-    @Column(name = "funding_fees", nullable = false, precision = 18, scale = 8)
-    @Builder.Default
-    private BigDecimal fundingFees = BigDecimal.ZERO;
-
-    @Column(nullable = false)
-    @Builder.Default
-    private boolean liquidated = false;
-
     @Column(name = "executed_at", nullable = false)
     @Builder.Default
     private LocalDateTime executedAt = LocalDateTime.now();
 
-    // Null while the position is open; set by PaperTradingService.closePosition()
     @Column(name = "closed_at")
     private LocalDateTime closedAt;
 }

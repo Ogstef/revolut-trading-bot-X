@@ -2,7 +2,6 @@ package com.stefo.revolut_trading_bot.alert;
 
 import com.stefo.revolut_trading_bot.model.entity.Position;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -42,32 +41,23 @@ public class TelegramMessageFormatter {
     // ─── Trade notifications ──────────────────────────────────────────────────
 
     public String formatPositionOpened(Position position) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<b>📈 POSITION OPENED</b>\n")
-          .append("Pair: <code>").append(position.getPair()).append("</code>")
-          .append(" | Strategy: <code>").append(position.getStrategyName()).append("</code>")
-          .append(" | Interval: <code>").append(position.getInterval()).append("</code>\n")
-          .append("Side: <b>").append(position.getSide()).append("</b>")
-          .append(" | Entry: €").append(formatPrice(position.getEntryPrice()))
-          .append(" | Qty: ").append(position.getQuantity().toPlainString()).append("\n")
-          .append("TP: €").append(formatPrice(position.getTakeProfit()))
-          .append(" | SL: €").append(formatPrice(position.getStopLoss()));
-        if (position.getVehicle() != null && position.getVehicle().isLeveraged()) {
-            sb.append("\nVehicle: <b>").append(position.getVehicle()).append("</b>")
-              .append(" | Collateral: €").append(fmt2(position.getCollateral()))
-              .append(" | Notional: €").append(fmt2(position.getNotional()))
-              .append(" | Liquidation: €").append(formatPrice(position.getLiquidationPrice()));
-        }
-        return sb.toString();
+        return "<b>📈 POSITION OPENED</b>\n"
+                + "Pair: <code>" + position.getPair() + "</code>"
+                + " | Strategy: <code>" + position.getStrategyName() + "</code>"
+                + " | Interval: <code>" + position.getInterval() + "</code>\n"
+                + "Side: <b>" + position.getSide() + "</b>"
+                + " | Entry: €" + formatPrice(position.getEntryPrice())
+                + " | Qty: " + position.getQuantity().toPlainString() + "\n"
+                + "TP: €" + formatPrice(position.getTakeProfit())
+                + " | SL: €" + formatPrice(position.getStopLoss());
     }
 
     public String formatPositionClosed(Position position, Trade trade) {
-        boolean liquidated = trade.isLiquidated();
         boolean win = trade.getNetPnl() != null
                 ? trade.getNetPnl().signum() > 0
                 : trade.getPnl() != null && trade.getPnl().signum() > 0;
-        String emoji = liquidated ? "💥" : (win ? "💰" : "📉");
-        String label = liquidated ? "LIQUIDATED" : (win ? "WIN" : "LOSS");
+        String emoji = win ? "💰" : "📉";
+        String label = win ? "WIN" : "LOSS";
 
         BigDecimal entryFee  = safe(trade.getEntryFee());
         BigDecimal exitFee   = safe(trade.getExitFee());
@@ -82,14 +72,6 @@ public class TelegramMessageFormatter {
         sb.append("Pair: <code>").append(position.getPair()).append("</code>")
           .append(" | Strategy: <code>").append(position.getStrategyName()).append("</code>")
           .append(" | Interval: <code>").append(position.getInterval()).append("</code>\n");
-        if (trade.getVehicle() != null && trade.getVehicle() != TradingVehicle.SPOT) {
-            sb.append("Vehicle: <b>").append(trade.getVehicle()).append("</b>")
-              .append(" | Leverage: <b>").append((int) trade.getLeverage()).append("x</b>");
-            if (trade.getFundingFees() != null && trade.getFundingFees().signum() > 0) {
-                sb.append(" | Funding: €").append(fmt2(trade.getFundingFees()));
-            }
-            sb.append("\n");
-        }
         sb.append("Entry: €").append(formatPrice(trade.getEntryPrice()))
           .append(" → Exit: €").append(formatPrice(trade.getExitPrice())).append("\n");
 
@@ -178,23 +160,6 @@ public class TelegramMessageFormatter {
             sb.append("\n");
         }
 
-        // Leverage overview — only shown when any leveraged activity happened today
-        if (data.leverageOverview() != null && !data.leverageOverview().isEmpty()) {
-            sb.append("\n<b>⚖️ Leverage Overview</b>\n");
-            for (DailySummaryData.VehicleAggregate agg : data.leverageOverview()) {
-                sb.append("  ").append(agg.vehicle()).append(": ")
-                  .append(agg.trades()).append(" trades");
-                if (agg.trades() > 0) {
-                    sb.append(" (").append(agg.wins()).append("W / ").append(agg.losses()).append("L)");
-                }
-                sb.append(" → net €").append(fmt2(agg.netPnl()));
-                if (agg.liquidations() > 0) {
-                    sb.append(" — 💥 ").append(agg.liquidations()).append(" liq");
-                }
-                sb.append("\n");
-            }
-        }
-
         if (!data.topWinners().isEmpty()) {
             sb.append("\n<b>🏆 Top Winners</b>\n");
             appendMovers(sb, data.topWinners());
@@ -224,19 +189,16 @@ public class TelegramMessageFormatter {
         }
     }
 
-    /** Two-decimal plain string, safe for null. */
     private String fmt2(BigDecimal v) {
         return v != null ? v.setScale(2, RoundingMode.HALF_UP).toPlainString() : "0.00";
     }
 
-    /** €+X.XX or €-X.XX with sign. */
     private String signedEur(BigDecimal v) {
         if (v == null) return "€0.00";
         String plain = v.setScale(2, RoundingMode.HALF_UP).toPlainString();
         return v.signum() >= 0 ? "+€" + plain : "€" + plain;
     }
 
-    /** +X.XX% or -X.XX% with sign. */
     private String signedPct(BigDecimal v) {
         if (v == null) return "0.00";
         String plain = v.setScale(2, RoundingMode.HALF_UP).toPlainString();

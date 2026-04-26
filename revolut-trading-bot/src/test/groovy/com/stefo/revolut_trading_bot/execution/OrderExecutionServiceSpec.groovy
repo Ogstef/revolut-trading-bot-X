@@ -1,13 +1,10 @@
 package com.stefo.revolut_trading_bot.execution
 
-import com.stefo.revolut_trading_bot.config.TradingConfig
 import com.stefo.revolut_trading_bot.model.entity.Position
 import com.stefo.revolut_trading_bot.model.enums.OrderSide
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus
 import com.stefo.revolut_trading_bot.model.enums.SignalType
 import com.stefo.revolut_trading_bot.model.enums.StrategyType
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle
-import com.stefo.revolut_trading_bot.portfolio.VehicleBalanceService
 import com.stefo.revolut_trading_bot.repository.PositionRepository
 import com.stefo.revolut_trading_bot.risk.RiskManager
 import com.stefo.revolut_trading_bot.risk.RiskValidationResult
@@ -21,19 +18,14 @@ import java.time.Instant
 
 class OrderExecutionServiceSpec extends Specification {
 
-    RiskManager                  riskManager                 = Mock()
-    PaperTradingService          paperTradingService         = Mock()
-    LeveragedPaperTradingService leveragedPaperTradingService = Mock()
-    VehicleBalanceService        vehicleBalanceService       = Mock()
-    LeverageCooldownService      cooldownService             = Mock()
-    TakeProfitStopLossManager    tpslManager                 = Mock()
-    PositionRepository           positionRepository          = Mock()
-    TradingConfig                config                      = buildConfig()
+    RiskManager               riskManager         = Mock()
+    PaperTradingService       paperTradingService = Mock()
+    TakeProfitStopLossManager tpslManager         = Mock()
+    PositionRepository        positionRepository  = Mock()
 
     @Subject
     OrderExecutionService service = new OrderExecutionService(
-            riskManager, paperTradingService, leveragedPaperTradingService,
-            vehicleBalanceService, cooldownService, tpslManager, positionRepository, config)
+            riskManager, paperTradingService, tpslManager, positionRepository)
 
     // ─── executeSignal ────────────────────────────────────────────────────────
 
@@ -54,7 +46,7 @@ class OrderExecutionServiceSpec extends Specification {
         given:
         def signal = signal(SignalType.SELL, "BTC-EUR", StrategyType.EMA_CROSSOVER)
         def openPositions = [openPosition()]
-        positionRepository.findByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> openPositions
+        positionRepository.findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> openPositions
 
         when:
         def result = service.executeSignal(signal, BigDecimal.valueOf(10_000), BigDecimal.valueOf(50_000))
@@ -67,7 +59,7 @@ class OrderExecutionServiceSpec extends Specification {
     def "SELL signal: no positions to close — no exception"() {
         given:
         def signal = signal(SignalType.SELL, "BTC-EUR", StrategyType.EMA_CROSSOVER)
-        positionRepository.findByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> []
+        positionRepository.findByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> []
 
         when:
         def result = service.executeSignal(signal, BigDecimal.valueOf(10_000), BigDecimal.valueOf(50_000))
@@ -105,56 +97,6 @@ class OrderExecutionServiceSpec extends Specification {
         then:
         !result.isPresent()
         0 * paperTradingService.openPosition(_, _, _)
-    }
-
-    // ─── Leverage blacklist + cooldown ────────────────────────────────────────
-
-    def "leveraged BUY blocked when strategy is excluded"() {
-        given: "MACD is excluded from leverage"
-        config.leverage.excludedStrategies = [StrategyType.MACD]
-        def signal = signal(SignalType.BUY, "BTC-EUR", StrategyType.MACD)
-
-        when:
-        def result = service.executeSignalForVehicle(signal, TradingVehicle.LEV_3X,
-                BigDecimal.valueOf(1000), BigDecimal.valueOf(50_000))
-
-        then:
-        !result.isPresent()
-        0 * leveragedPaperTradingService.openPosition(_, _, _, _)
-        0 * vehicleBalanceService.available(_, _, _)
-    }
-
-    def "leveraged BUY blocked when cooldown is active"() {
-        given: "Mock() defaults canOpen to false — cooldown is active by default"
-        def signal = signal(SignalType.BUY, "BTC-EUR", StrategyType.EMA_CROSSOVER)
-
-        when:
-        def result = service.executeSignalForVehicle(signal, TradingVehicle.LEV_5X,
-                BigDecimal.valueOf(1000), BigDecimal.valueOf(50_000))
-
-        then:
-        !result.isPresent()
-        0 * leveragedPaperTradingService.openPosition(_, _, _, _)
-        0 * vehicleBalanceService.available(_, _, _)
-    }
-
-    def "leveraged BUY proceeds when cooldown expired and strategy not excluded"() {
-        given:
-        def signal = signal(SignalType.BUY, "BTC-EUR", StrategyType.EMA_CROSSOVER)
-        def opened = openPosition()
-        cooldownService.canOpen(_, _, _, _, _) >> true
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(
-                OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.LEV_5X) >> 0L
-        vehicleBalanceService.available("BTC-EUR", StrategyType.EMA_CROSSOVER, TradingVehicle.LEV_5X) >> BigDecimal.valueOf(1000)
-        leveragedPaperTradingService.openPosition(signal, _, BigDecimal.valueOf(50_000), TradingVehicle.LEV_5X) >> opened
-
-        when:
-        def result = service.executeSignalForVehicle(signal, TradingVehicle.LEV_5X,
-                BigDecimal.valueOf(1000), BigDecimal.valueOf(50_000))
-
-        then:
-        result.isPresent()
-        1 * leveragedPaperTradingService.openPosition(_, _, _, TradingVehicle.LEV_5X) >> opened
     }
 
     // ─── monitorPositions (pair + strategy scoped) ───────────────────────────
@@ -229,24 +171,5 @@ class OrderExecutionServiceSpec extends Specification {
                 .status(OrderStatus.OPEN)
                 .strategyName(StrategyType.EMA_CROSSOVER)
                 .build()
-    }
-
-    private static TradingConfig buildConfig() {
-        def risk = new TradingConfig.Risk()
-        risk.maxConcurrentPositions = 3
-        risk.maxDailyLossPct = BigDecimal.valueOf(5)
-        risk.maxConsecutiveLosses = 5
-        risk.maxPositionPct = BigDecimal.valueOf(2)
-        risk.takeProfitPct = BigDecimal.valueOf(5)
-        risk.stopLossPct = BigDecimal.valueOf(3)
-
-        def cfg = new TradingConfig()
-        cfg.pairs = ["BTC-EUR"]
-        cfg.mode = "PAPER"
-        cfg.paperBalance = BigDecimal.valueOf(10_000)
-        cfg.pollingIntervalSeconds = 30
-        cfg.risk = risk
-        cfg.strategy = new TradingConfig.Strategy()
-        cfg
     }
 }

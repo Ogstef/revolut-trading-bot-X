@@ -62,11 +62,11 @@ class DashboardControllerHistorySpec extends Specification {
 
     def "strategyHistory() returns empty list when repository has no matches"() {
         given:
-        strategyService.getTradeHistory(null, null, StrategyType.EMA_CROSSOVER, null, null, null) >> []
+        strategyService.getTradeHistory(null, null, StrategyType.EMA_CROSSOVER, null, null) >> []
 
         when:
         def response = controller.strategyHistory(
-                StrategyType.EMA_CROSSOVER, null, null, null, null, null)
+                StrategyType.EMA_CROSSOVER, null, null, null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -91,11 +91,11 @@ class DashboardControllerHistorySpec extends Specification {
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 new BigDecimal("1.50"), new BigDecimal("3.00"))
 
-        strategyService.getTradeHistory("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, null, null, null) >> [entry]
+        strategyService.getTradeHistory("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER, null, null) >> [entry]
 
         when:
         def response = controller.strategyHistory(
-                StrategyType.EMA_CROSSOVER, "BTC-EUR", "15m", null, null, null)
+                StrategyType.EMA_CROSSOVER, "BTC-EUR", "15m", null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -124,11 +124,11 @@ class DashboardControllerHistorySpec extends Specification {
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
                 new BigDecimal("-1.00"), new BigDecimal("-1.00"))
 
-        strategyService.getTradeHistory(null, null, StrategyType.MACD, null, null, null) >> [entry]
+        strategyService.getTradeHistory(null, null, StrategyType.MACD, null, null) >> [entry]
 
         when:
         def response = controller.strategyHistory(
-                StrategyType.MACD, null, null, null, null, null)
+                StrategyType.MACD, null, null, null, null)
 
         then:
         response.statusCode == HttpStatus.OK
@@ -151,20 +151,20 @@ class DashboardControllerHistorySpec extends Specification {
 
         when:
         def response = controller.strategyHistory(
-                StrategyType.BOLLINGER, "ETH-EUR", "1h", null, from, to)
+                StrategyType.BOLLINGER, "ETH-EUR", "1h", from, to)
 
         then:
         response.statusCode == HttpStatus.OK
-        1 * strategyService.getTradeHistory("ETH-EUR", "1h", StrategyType.BOLLINGER, from, to, null) >> []
+        1 * strategyService.getTradeHistory("ETH-EUR", "1h", StrategyType.BOLLINGER, from, to) >> []
     }
 
     def "strategyHistory() defaults pair and interval when not provided"() {
         when:
         def response = controller.strategyHistory(
-                StrategyType.RSI_MOMENTUM, null, null, null, null, null)
+                StrategyType.RSI_MOMENTUM, null, null, null, null)
 
         then:
         response.statusCode == HttpStatus.OK
-        1 * strategyService.getTradeHistory(null, null, StrategyType.RSI_MOMENTUM, null, null, null) >> []
+        1 * strategyService.getTradeHistory(null, null, StrategyType.RSI_MOMENTUM, null, null) >> []
     }
 }

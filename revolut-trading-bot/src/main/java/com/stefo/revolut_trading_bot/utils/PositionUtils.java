@@ -2,7 +2,6 @@ package com.stefo.revolut_trading_bot.utils;
 
 import com.stefo.revolut_trading_bot.model.dto.PositionView;
 import com.stefo.revolut_trading_bot.model.entity.Position;
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import lombok.experimental.UtilityClass;
 
 import java.math.BigDecimal;
@@ -12,8 +11,6 @@ import java.math.RoundingMode;
 public class PositionUtils {
 
     public static PositionView toPositionView(Position p, BigDecimal currentPrice) {
-        // Unrealised PnL = (currentPrice - entryPrice) × quantity
-        // For SELL (short): reversed
         BigDecimal priceDiff = currentPrice.subtract(p.getEntryPrice());
         if (p.getSide().name().equals("SELL")) {
             priceDiff = priceDiff.negate();
@@ -27,17 +24,6 @@ public class PositionUtils {
                 .multiply(BigDecimal.valueOf(100))
                 .setScale(2, RoundingMode.HALF_UP);
 
-        TradingVehicle vehicle = p.getVehicle() != null ? p.getVehicle() : TradingVehicle.SPOT;
-        BigDecimal marginRatio = null;
-        if (vehicle.isLeveraged() && p.getCollateral() != null && p.getCollateral().signum() > 0) {
-            // Remaining equity as a fraction of initial collateral.
-            // 1.0 = full collateral intact; 0.0 = liquidated.
-            BigDecimal funding = p.getFundingFeesAccrued() != null ? p.getFundingFeesAccrued() : BigDecimal.ZERO;
-            BigDecimal equity = p.getCollateral().add(unrealisedPnl).subtract(funding);
-            marginRatio = equity.divide(p.getCollateral(), 4, RoundingMode.HALF_UP)
-                    .max(BigDecimal.ZERO);
-        }
-
         return new PositionView(
                 p.getId(), p.getPair(), p.getSide().name(),
                 p.getEntryPrice(), p.getQuantity(),
@@ -46,14 +32,7 @@ public class PositionUtils {
                 p.getSignalReason(), p.getOpenedAt(),
                 p.getInterval(),
                 p.getStrategyName().name(),
-                p.getStrategyName().getDisplayName(),
-                vehicle,
-                p.getLeverage(),
-                p.getCollateral(),
-                p.getNotional(),
-                p.getLiquidationPrice(),
-                marginRatio,
-                p.getFundingFeesAccrued()
+                p.getStrategyName().getDisplayName()
         );
     }
 

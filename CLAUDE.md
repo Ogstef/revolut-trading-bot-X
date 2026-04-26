@@ -6,8 +6,6 @@ Automated cryptocurrency trading bot. Runs 16 strategies (13 technical-analysis 
 
 **16 strategies × 3 pairs × 5 intervals = 240 independent SPOT portfolios**, all on a 30-second heartbeat.
 
-**Phase 13 (leveraged paper trading):** adds a parallel set of leveraged virtual portfolios. Execution unit becomes `(pair, strategy, interval, vehicle)` where `vehicle ∈ {SPOT, LEV_3X, LEV_5X, LEV_10X}`. Narrow rollout: `BTC-EUR × [1h, 4h, 1d] × [3x, 5x, 10x]` → +117 leveraged portfolios (+39 if only the BTC/EMA_CROSSOVER row × 3 ratios for seeding shown above). Enabled via `trading.leverage.enabled: true`.
-
 Monorepo with three modules:
 - **`revolut-trading-bot/`** — Java 21 / Spring Boot backend (REST API, trading engine, PostgreSQL, sentiment classifier + ingest)
 - **`revolut-trading-bot-ui/`** — React 19 / TypeScript frontend (dashboard, charts, strategy comparison)
@@ -36,7 +34,7 @@ npm install && npm run dev
 /Applications/IntelliJ\ IDEA\ CE.app/Contents/plugins/maven/lib/maven3/bin/mvn
 ```
 
-**Database:** PostgreSQL 16 via Docker — host `localhost:5432`, db `trading_bot`, schema `trading`, user `trading_bot`, password `secret`. Migrations applied automatically by Flyway on backend startup (V1–V9).
+**Database:** PostgreSQL 16 via Docker — host `localhost:5432`, db `trading_bot`, schema `trading`, user `trading_bot`, password `secret`. Migrations applied automatically by Flyway on backend startup (V1–V11).
 
 ---
 

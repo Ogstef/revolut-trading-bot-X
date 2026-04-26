@@ -9,7 +9,6 @@ import com.stefo.revolut_trading_bot.model.entity.SignalLog;
 import com.stefo.revolut_trading_bot.model.entity.Trade;
 import com.stefo.revolut_trading_bot.model.enums.BotEventType;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle;
 import com.stefo.revolut_trading_bot.portfolio.TradingStats;
 import com.stefo.revolut_trading_bot.portfolio.TradeService;
 import com.stefo.revolut_trading_bot.repository.CandlestickRepository;
@@ -59,10 +58,6 @@ public class DashboardController {
 
     // ─── Status ───────────────────────────────────────────────────────────────
 
-    /**
-     * High-level bot health — running state, mode, circuit breakers, daily PnL.
-     * GET /api/status
-     */
     @GetMapping("/status")
     public ResponseEntity<BotStatusResponse> status() {
         return ResponseEntity.ok(botStatusService.getStatus());
@@ -70,35 +65,19 @@ public class DashboardController {
 
     // ─── Positions ────────────────────────────────────────────────────────────
 
-    /**
-     * All currently open positions enriched with live unrealised PnL.
-     * Each position uses the current price of its own pair.
-     * GET /api/positions?pair=BTC-EUR (optional pair filter)
-     */
     @GetMapping("/positions")
     public ResponseEntity<List<PositionView>> positions(
             @RequestParam(required = false) String pair) {
         return ResponseEntity.ok(positionService.getPositions(pair));
     }
 
-    /**
-     * Every OPEN position across every pair, interval, and strategy — enriched with
-     * live price, unrealised PnL, interval, strategyName, and displayName.
-     * GET /api/positions/live
-     */
     @GetMapping("/positions/live")
-    public ResponseEntity<List<PositionView>> livePositions(
-            @RequestParam(required = false) TradingVehicle vehicle) {
-        return ResponseEntity.ok(positionService.getAllLiveViews(vehicle));
+    public ResponseEntity<List<PositionView>> livePositions() {
+        return ResponseEntity.ok(positionService.getAllLiveViews());
     }
 
     // ─── Trades ───────────────────────────────────────────────────────────────
 
-    /**
-     * Recent closed trades with entry/exit prices and PnL.
-     * GET /api/trades?limit=50&pair=BTC-EUR
-     * When pair is omitted, returns trades for the primary (first) configured pair.
-     */
     @GetMapping("/trades")
     public ResponseEntity<List<Trade>> trades(
             @RequestParam(defaultValue = "50") int limit,
@@ -109,19 +88,11 @@ public class DashboardController {
 
     // ─── Stats ────────────────────────────────────────────────────────────────
 
-    /**
-     * Aggregate performance statistics: win rate, PnL, expectancy.
-     * GET /api/stats
-     */
     @GetMapping("/stats")
     public ResponseEntity<TradingStats> stats() {
         return ResponseEntity.ok(tradeService.getStats());
     }
 
-    /**
-     * PnL broken down by day / week / month / all-time.
-     * GET /api/pnl
-     */
     @GetMapping("/pnl")
     public ResponseEntity<PnlBreakdown> pnl() {
         return ResponseEntity.ok(tradeService.getPnlBreakdown());
@@ -129,11 +100,6 @@ public class DashboardController {
 
     // ─── Control plane ────────────────────────────────────────────────────────
 
-    /**
-     * Immediately stops the trading loop — no new positions will be opened or closed
-     * until POST /api/resume is called. Open positions are NOT automatically closed.
-     * POST /api/emergency-stop
-     */
     @PostMapping("/emergency-stop")
     public ResponseEntity<String> emergencyStop() {
         log.warn("Emergency stop requested via /api/emergency-stop");
@@ -142,10 +108,6 @@ public class DashboardController {
         return ResponseEntity.ok("Bot stopped. Call POST /api/resume to restart trading.");
     }
 
-    /**
-     * Resumes the trading loop after an emergency stop.
-     * POST /api/resume
-     */
     @PostMapping("/resume")
     public ResponseEntity<String> resume() {
         log.info("Resume requested via /api/resume");
@@ -154,11 +116,6 @@ public class DashboardController {
         return ResponseEntity.ok("Bot resumed. Next cycle will execute on schedule.");
     }
 
-    /**
-     * Updates trading/risk parameters at runtime — changes take effect on the next cycle.
-     * Only non-null fields in the request body are applied.
-     * POST /api/config
-     */
     @PostMapping("/config")
     public ResponseEntity<String> updateConfig(@Valid @RequestBody ConfigUpdateRequest req) {
         log.info("Config update requested: {}", req);
@@ -171,10 +128,6 @@ public class DashboardController {
 
     // ─── Pairs ────────────────────────────────────────────────────────────────
 
-    /**
-     * Lists all configured trading pairs with base/quote asset breakdown.
-     * GET /api/pairs
-     */
     @GetMapping("/pairs")
     public ResponseEntity<List<Map<String, Object>>> pairs() {
         List<Map<String, Object>> result = tradingConfig.getPairs().stream()
@@ -192,10 +145,6 @@ public class DashboardController {
 
     // ─── Intervals ──────────────────────────────────────────────────────────
 
-    /**
-     * Lists all configured candle intervals with labels and display names.
-     * GET /api/intervals
-     */
     @GetMapping("/intervals")
     public ResponseEntity<List<Map<String, Object>>> intervals() {
         List<Map<String, Object>> result = tradingConfig.getIntervals().stream()
@@ -210,29 +159,8 @@ public class DashboardController {
         return ResponseEntity.ok(result);
     }
 
-    /**
-     * GET /api/vehicles — lists all trading vehicles and whether each is active.
-     * SPOT is always active. LEV_*X are active only when enabled in trading.leverage.ratios.
-     */
-    @GetMapping("/vehicles")
-    public ResponseEntity<List<VehicleInfo>> vehicles() {
-        TradingConfig.Leverage lev = tradingConfig.getLeverage();
-        List<VehicleInfo> result = java.util.Arrays.stream(TradingVehicle.values())
-                .map(v -> {
-                    boolean active = v == TradingVehicle.SPOT
-                            || (lev.isEnabled() && lev.getRatios().contains(v.getLeverage()));
-                    return new VehicleInfo(v, v.getLeverage(), active);
-                })
-                .toList();
-        return ResponseEntity.ok(result);
-    }
-
     // ─── Multi-strategy endpoints (Phase 7 + Phase 8 + Phase 11) ─────────────
 
-    /**
-     * Lists all registered strategy names and their high-level risk stats.
-     * GET /api/strategies?pair=BTC-EUR&interval=15m
-     */
     @GetMapping("/strategies")
     public ResponseEntity<List<Map<String, Object>>> strategies(
             @RequestParam(required = false) String pair,
@@ -240,95 +168,54 @@ public class DashboardController {
         return ResponseEntity.ok(strategyService.getResult(pair, interval));
     }
 
-    /**
-     * Open positions for a single strategy enriched with live unrealised PnL.
-     * GET /api/strategies/{strategyType}/positions?pair=BTC-EUR&interval=15m
-     */
     @GetMapping("/strategies/{strategyType}/positions")
     public ResponseEntity<List<PositionView>> strategyPositions(
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair,
-            @RequestParam(required = false) String interval,
-            @RequestParam(required = false) TradingVehicle vehicle) {
-        return ResponseEntity.ok(strategyService.getPositionForStrategy(pair, interval, strategyType, vehicle));
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(strategyService.getPositionForStrategy(pair, interval, strategyType));
     }
 
-    /**
-     * Closed trades for a single strategy.
-     * GET /api/strategies/{strategyType}/trades?pair=BTC-EUR&interval=15m&limit=50
-     */
     @GetMapping("/strategies/{strategyType}/trades")
     public ResponseEntity<List<Trade>> strategyTrades(
             @PathVariable StrategyType strategyType,
             @RequestParam(defaultValue = "50") int limit,
             @RequestParam(required = false) String pair,
-            @RequestParam(required = false) String interval,
-            @RequestParam(required = false) TradingVehicle vehicle) {
+            @RequestParam(required = false) String interval) {
         String effectivePair     = pair != null ? pair : tradingConfig.primaryPair();
         String effectiveInterval = interval != null ? interval : tradingConfig.primaryInterval();
-        List<Trade> rows = vehicle == null
-                ? tradeRepository.findRecentTradesByPairAndIntervalAndStrategy(
-                        effectivePair, effectiveInterval, strategyType, limit)
-                : tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle(
-                        effectivePair, effectiveInterval, strategyType, vehicle, limit);
-        return ResponseEntity.ok(rows);
+        return ResponseEntity.ok(tradeRepository.findRecentTradesByPairAndIntervalAndStrategy(
+                effectivePair, effectiveInterval, strategyType, limit));
     }
 
-    /**
-     * Full trade history for a single (pair, interval, strategy) virtual portfolio,
-     * enriched with the entry signal reason, TP/SL targets, opening timestamp,
-     * holding duration, and R-multiple.
-     *
-     * Optional {@code from} / {@code to} ISO-8601 timestamps narrow the result by
-     * trade execution time. Returns newest first; no pagination — datasets per
-     * (pair, interval, strategy) are bounded.
-     *
-     * GET /api/strategies/{strategyType}/history?pair=BTC-EUR&interval=15m
-     *     &from=2026-01-01T00:00:00&to=2026-04-14T23:59:59
-     */
     @GetMapping("/strategies/{strategyType}/history")
     public ResponseEntity<List<TradeHistoryEntry>> strategyHistory(
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair,
             @RequestParam(required = false) String interval,
-            @RequestParam(required = false) TradingVehicle vehicle,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
-        return ResponseEntity.ok(strategyService.getTradeHistory(pair, interval, strategyType, from, to, vehicle));
+        return ResponseEntity.ok(strategyService.getTradeHistory(pair, interval, strategyType, from, to));
     }
 
-    /**
-     * Win rate, PnL, expectancy for a single strategy.
-     * GET /api/strategies/{strategyType}/stats?pair=BTC-EUR&interval=15m
-     */
     @GetMapping("/strategies/{strategyType}/stats")
     public ResponseEntity<TradingStats> strategyStats(
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair,
-            @RequestParam(required = false) String interval,
-            @RequestParam(required = false) TradingVehicle vehicle) {
-        return ResponseEntity.ok(tradeService.getStatsForStrategy(pair, interval, strategyType, vehicle));
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(tradeService.getStatsForStrategy(pair, interval, strategyType));
     }
 
-    /**
-     * PnL breakdown (daily/weekly/monthly/all-time) for a single strategy.
-     * GET /api/strategies/{strategyType}/pnl?pair=BTC-EUR&interval=15m
-     */
     @GetMapping("/strategies/{strategyType}/pnl")
     public ResponseEntity<PnlBreakdown> strategyPnl(
             @PathVariable StrategyType strategyType,
             @RequestParam(required = false) String pair,
-            @RequestParam(required = false) String interval,
-            @RequestParam(required = false) TradingVehicle vehicle) {
-        return ResponseEntity.ok(tradeService.getPnlBreakdownForStrategy(pair, interval, strategyType, vehicle));
+            @RequestParam(required = false) String interval) {
+        return ResponseEntity.ok(tradeService.getPnlBreakdownForStrategy(pair, interval, strategyType));
     }
 
-    /**
-     * Recent signal logs for a single strategy, newest first.
-     * GET /api/strategies/{strategyType}/signals?pair=BTC-EUR&interval=15m&limit=20
-     */
     @GetMapping("/strategies/{strategyType}/signals")
     public ResponseEntity<List<SignalLog>> strategySignals(
             @PathVariable StrategyType strategyType,
@@ -339,10 +226,6 @@ public class DashboardController {
                 signalService.getSignalStrategies(pair, interval, strategyType, limit));
     }
 
-    /**
-     * BUY/SELL/HOLD signal counts grouped by strategy.
-     * GET /api/signals/summary?pair=BTC-EUR&interval=15m
-     */
     @GetMapping("/signals/summary")
     public ResponseEntity<List<Map<String, Object>>> signalsSummary(
             @RequestParam(required = false) String pair,
@@ -350,11 +233,6 @@ public class DashboardController {
         return ResponseEntity.ok(signalService.getSummary(pair, interval));
     }
 
-    /**
-     * Most recent signal per (pair, interval, strategy) triple — one row for every
-     * configured triple, null-filled when no signal has been logged yet.
-     * GET /api/signals/current?pair=BTC-EUR&interval=15m
-     */
     @GetMapping("/signals/current")
     public ResponseEntity<List<CurrentSignal>> currentSignals(
             @RequestParam(required = false) String pair,
@@ -364,24 +242,13 @@ public class DashboardController {
 
     // ─── Stats aggregation ────────────────────────────────────────────────────
 
-    /**
-     * Grand Leaderboard — one TripleStats row per configured (pair, interval, strategy).
-     * Empty triples (no trades yet) are zero-filled. Total rows = pairs × intervals × strategies.
-     * GET /api/stats/all-triples
-     */
     @GetMapping("/stats/all-triples")
-    public ResponseEntity<List<TripleStats>> allTripleStats(
-            @RequestParam(required = false) TradingVehicle vehicle) {
-        return ResponseEntity.ok(statsAggregationService.getAllTripleStats(vehicle));
+    public ResponseEntity<List<TripleStats>> allTripleStats() {
+        return ResponseEntity.ok(statsAggregationService.getAllTripleStats());
     }
 
     // ─── Activity feed ────────────────────────────────────────────────────────
 
-    /**
-     * Reverse-chronological audit trail — position opens/closes, circuit-breaker
-     * transitions, emergency stop/resume, and config changes.
-     * GET /api/activity?limit=100&types=POSITION_OPENED,CIRCUIT_BREAKER_TRIPPED
-     */
     @GetMapping("/activity")
     public ResponseEntity<List<BotEvent>> activity(
             @RequestParam(defaultValue = "100") int limit,
@@ -393,11 +260,6 @@ public class DashboardController {
 
     // ─── Candles ──────────────────────────────────────────────────────────────
 
-    /**
-     * OHLCV candles for a (pair, interval) from the local DB cache.
-     * Returns the last {@code limit} candles in ascending timestamp order.
-     * GET /api/candles?pair=BTC-EUR&interval=15m&limit=500
-     */
     @GetMapping("/candles")
     public ResponseEntity<List<CandleDto>> candles(
             @RequestParam String pair,
@@ -416,10 +278,6 @@ public class DashboardController {
 
     // ─── Market sentiment ─────────────────────────────────────────────────────
 
-    /**
-     * Crypto Fear & Greed Index from alternative.me. Cached 1 hour — indicator only.
-     * GET /api/market/fear-greed
-     */
     @GetMapping("/market/fear-greed")
     public ResponseEntity<FearGreedResponse> fearGreed() {
         FearGreedResponse result = fearGreedService.get();
@@ -427,11 +285,6 @@ public class DashboardController {
         return ResponseEntity.ok(result);
     }
 
-    /**
-     * Windowed sentiment aggregate for a pair + source. ?interval= controls the
-     * lookback window; ?source= picks REDDIT / CRYPTOPANIC / COMBINED (default COMBINED).
-     * GET /api/market/sentiment?pair=BTC-EUR&source=COMBINED&interval=1h
-     */
     @GetMapping("/market/sentiment")
     public ResponseEntity<SentimentResponse> sentiment(
             @RequestParam(defaultValue = "BTC-EUR") String pair,

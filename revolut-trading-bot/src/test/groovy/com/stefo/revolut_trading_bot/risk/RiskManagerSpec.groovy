@@ -4,7 +4,6 @@ import com.stefo.revolut_trading_bot.config.TradingConfig
 import com.stefo.revolut_trading_bot.model.entity.Trade
 import com.stefo.revolut_trading_bot.model.enums.OrderStatus
 import com.stefo.revolut_trading_bot.model.enums.StrategyType
-import com.stefo.revolut_trading_bot.model.enums.TradingVehicle
 import com.stefo.revolut_trading_bot.repository.PositionRepository
 import com.stefo.revolut_trading_bot.repository.TradeRepository
 import com.stefo.revolut_trading_bot.service.BotEventService
@@ -28,9 +27,9 @@ class RiskManagerSpec extends Specification {
 
     def "approved when all risk checks pass"() {
         given:
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 0
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> BigDecimal.ZERO
-        tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle("BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT, 5) >> []
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> []
 
         when:
         def result = riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER)
@@ -42,7 +41,7 @@ class RiskManagerSpec extends Specification {
 
     def "rejected when max concurrent positions reached"() {
         given: "already at the position cap (3)"
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 3
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 3
 
         when:
         def result = riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER)
@@ -54,9 +53,9 @@ class RiskManagerSpec extends Specification {
 
     def "rejected when daily loss breaches circuit breaker"() {
         given:
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 0
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
         // Daily PnL is -600 EUR, threshold is -5% of 10_000 = -500 EUR
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> BigDecimal.valueOf(-600)
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.valueOf(-600)
 
         when:
         def result = riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER)
@@ -68,9 +67,9 @@ class RiskManagerSpec extends Specification {
 
     def "rejected when consecutive loss circuit breaker trips"() {
         given:
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 0
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> BigDecimal.ZERO
-        tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle("BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT, 5) >> [
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> [
             losingTrade(), losingTrade(), losingTrade(), losingTrade(), losingTrade()
         ]
 
@@ -84,9 +83,9 @@ class RiskManagerSpec extends Specification {
 
     def "consecutive loss count stops at first winning trade"() {
         given: "2 losses followed by a win and 2 more losses — count must be 2 not 4"
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 0
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> BigDecimal.ZERO
-        tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle("BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT, 5) >> [
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> [
             losingTrade(), losingTrade(), winningTrade(), losingTrade(), losingTrade()
         ]
 
@@ -99,9 +98,9 @@ class RiskManagerSpec extends Specification {
 
     def "position size is 2% of available balance"() {
         given:
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 0
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> BigDecimal.ZERO
-        tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle("BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT, 5) >> []
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> []
 
         when:
         def result = riskManager.validateForStrategy(BigDecimal.valueOf(5_000), "BTC-EUR", StrategyType.EMA_CROSSOVER)
@@ -113,9 +112,9 @@ class RiskManagerSpec extends Specification {
 
     def "legacy validate() delegates to validateForStrategy with primary pair and null strategy"() {
         given:
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, null, TradingVehicle.SPOT) >> 0
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, null, TradingVehicle.SPOT) >> BigDecimal.ZERO
-        tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle("BTC-EUR", _, null, TradingVehicle.SPOT, 5) >> []
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, null) >> 0
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, null) >> BigDecimal.ZERO
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, null, 5) >> []
 
         when:
         def result = riskManager.validate(BigDecimal.valueOf(10_000))
@@ -128,9 +127,9 @@ class RiskManagerSpec extends Specification {
 
     def "currentStatusForStrategy returns correct snapshot values"() {
         given:
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 2
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> BigDecimal.valueOf(-100)
-        tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle("BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT, 5) >> [losingTrade(), losingTrade()]
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 2
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.valueOf(-100)
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> [losingTrade(), losingTrade()]
 
         when:
         def status = riskManager.currentStatusForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER)
@@ -147,9 +146,9 @@ class RiskManagerSpec extends Specification {
 
     def "anyCircuitBreakerTripped is true when daily limit breached"() {
         given:
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 0
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> BigDecimal.valueOf(-600)
-        tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle("BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT, 5) >> []
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.valueOf(-600)
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> []
 
         when:
         def status = riskManager.currentStatusForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER)
@@ -161,9 +160,9 @@ class RiskManagerSpec extends Specification {
 
     def "positionLimitReached is true when at max concurrent positions"() {
         given:
-        positionRepository.countByStatusAndPairAndIntervalAndStrategyNameAndVehicle(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> 3
-        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategyAndVehicle(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT) >> BigDecimal.ZERO
-        tradeRepository.findRecentTradesByPairAndIntervalAndStrategyAndVehicle("BTC-EUR", _, StrategyType.EMA_CROSSOVER, TradingVehicle.SPOT, 5) >> []
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 3
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> []
 
         when:
         def status = riskManager.currentStatusForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", StrategyType.EMA_CROSSOVER)
@@ -275,14 +274,12 @@ class RiskManagerSpec extends Specification {
     private static Trade losingTrade() {
         def t = new Trade()
         t.pnl = BigDecimal.valueOf(-50)
-        t.vehicle = TradingVehicle.SPOT
         return t
     }
 
     private static Trade winningTrade() {
         def t = new Trade()
         t.pnl = BigDecimal.valueOf(100)
-        t.vehicle = TradingVehicle.SPOT
         return t
     }
 
@@ -292,7 +289,6 @@ class RiskManagerSpec extends Specification {
         t.interval = interval
         t.strategyName = strategy
         t.pnl = BigDecimal.valueOf(pnl)
-        t.vehicle = TradingVehicle.SPOT
         return t
     }
 }

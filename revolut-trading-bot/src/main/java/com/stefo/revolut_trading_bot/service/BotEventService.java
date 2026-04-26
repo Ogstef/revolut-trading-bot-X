@@ -71,23 +71,6 @@ public class BotEventService {
                 .build());
     }
 
-    public void recordPositionLiquidated(Trade t) {
-        String title = "LIQUIDATED — " + t.getVehicle() + " " + t.getStrategyName()
-                + " " + t.getPair() + " " + t.getSide();
-        String detail = String.format("Leverage: %dx · Collateral lost: €%s · Exit reason: LIQUIDATED",
-                (int) t.getLeverage(),
-                t.getCollateral() == null ? "—" : t.getCollateral().toPlainString());
-        saveSafely(BotEvent.builder()
-                .type(BotEventType.POSITION_LIQUIDATED)
-                .severity(BotEventSeverity.CRITICAL)
-                .pair(t.getPair())
-                .interval(t.getInterval())
-                .strategy(t.getStrategyName().name())
-                .title(title)
-                .detail(detail)
-                .build());
-    }
-
     public void recordCircuitBreakerTripped(String pair, String interval, StrategyType strategy, String cause) {
         saveSafely(BotEvent.builder()
                 .type(BotEventType.CIRCUIT_BREAKER_TRIPPED)
