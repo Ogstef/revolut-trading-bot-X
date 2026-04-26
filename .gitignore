@@ -1,2 +1,5 @@
 .DS_Store
 **/.DS_Store
+
+# scrapers/ lives in its own GitHub repo (Ogstef/reddit-crypto-scraper)
+scrapers/
