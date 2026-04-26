@@ -2,15 +2,16 @@
 
 ## Overview
 
-Automated cryptocurrency trading bot. Runs 13 technical-analysis strategies across 3 pairs and 5 candle intervals simultaneously. Each `(pair, strategy, interval)` triple is a fully isolated virtual portfolio with independent positions, trades, risk management, and P&L tracking.
+Automated cryptocurrency trading bot. Runs 16 strategies (13 technical-analysis + 3 sentiment) across 3 pairs and 5 candle intervals simultaneously. Each `(pair, strategy, interval)` triple is a fully isolated virtual portfolio with independent positions, trades, risk management, and P&L tracking.
 
-**13 strategies × 3 pairs × 5 intervals = 195 independent SPOT portfolios**, all on a 30-second heartbeat.
+**16 strategies × 3 pairs × 5 intervals = 240 independent SPOT portfolios**, all on a 30-second heartbeat.
 
 **Phase 13 (leveraged paper trading):** adds a parallel set of leveraged virtual portfolios. Execution unit becomes `(pair, strategy, interval, vehicle)` where `vehicle ∈ {SPOT, LEV_3X, LEV_5X, LEV_10X}`. Narrow rollout: `BTC-EUR × [1h, 4h, 1d] × [3x, 5x, 10x]` → +117 leveraged portfolios (+39 if only the BTC/EMA_CROSSOVER row × 3 ratios for seeding shown above). Enabled via `trading.leverage.enabled: true`.
 
-Monorepo with two modules:
-- **`revolut-trading-bot/`** — Java 21 / Spring Boot backend (REST API, trading engine, PostgreSQL)
+Monorepo with three modules:
+- **`revolut-trading-bot/`** — Java 21 / Spring Boot backend (REST API, trading engine, PostgreSQL, sentiment classifier + ingest)
 - **`revolut-trading-bot-ui/`** — React 19 / TypeScript frontend (dashboard, charts, strategy comparison)
+- **`scrapers/sentiment-scraper/`** — Python 3.12 microservice that scrapes Reddit + CryptoPanic and POSTs batches to the backend's ingest endpoint (Reddit/CryptoPanic APIs rejected: privacy + €50/wk cost)
 
 **Backend-specific instructions:** `revolut-trading-bot/CLAUDE.md`
 **Frontend-specific instructions:** `revolut-trading-bot-ui/CLAUDE.md`
@@ -44,7 +45,7 @@ npm install && npm run dev
 The fundamental unit is the **triple `(pair, strategy, interval)`**:
 
 - **Pair:** BTC-EUR, ETH-EUR, SOL-EUR
-- **Strategy:** 13 strategies — EMA_CROSSOVER, MACD, BOLLINGER, RSI_MOMENTUM, STOCH_RSI, TRIPLE_EMA, PARABOLIC_SAR, ADX_DI, CCI, MFI, DONCHIAN, ICHIMOKU, SUPERTREND
+- **Strategy:** 16 strategies — 13 TA (EMA_CROSSOVER, MACD, BOLLINGER, RSI_MOMENTUM, STOCH_RSI, TRIPLE_EMA, PARABOLIC_SAR, ADX_DI, CCI, MFI, DONCHIAN, ICHIMOKU, SUPERTREND) + 3 sentiment (REDDIT_SENTIMENT, CRYPTOPANIC_SENTIMENT, COMBINED_SENTIMENT; enabled via `sentiment.enabled`)
 - **Interval:** 15m, 1h, 4h, 1d, 1w (configured in `application.yml` as `[15, 60, 240, 1440, 10080]`)
 
 **Balance sharing:** balances are keyed by `(pair, strategy)` and shared across intervals. Positions, trades, risk, and P&L are isolated per interval.
@@ -83,5 +84,7 @@ Key endpoints:
 | `GET /api/activity?limit=&types=` | Bot event audit trail |
 | `GET /api/candles?pair=&interval=&limit=` | Cached candlestick data |
 | `GET /api/market/fear-greed` | Crypto Fear & Greed Index (1h in-memory cache) |
+| `GET /api/market/sentiment?pair=&source=&interval=` | Windowed Reddit/CryptoPanic/combined sentiment aggregate |
+| `POST /api/sentiment/ingest/{reddit,cryptopanic}` | Scraper push — Bearer-authed, batched |
 
 `?pair=` defaults to `BTC-EUR`; `?interval=` defaults to `15m` when omitted.

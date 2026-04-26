@@ -13,7 +13,7 @@
 - **Ta4j 0.16** — technical analysis indicators (EMA, RSI, MACD, Ichimoku, etc.)
 - **BouncyCastle 1.83** — Ed25519 request signing for Revolut X API
 - **OkHttp 4.12** — HTTP client for Revolut X API
-- **Flyway** — database migrations (V1–V9 applied; V9 adds leverage fields to `positions` / `trades`)
+- **Flyway** — database migrations (V1–V10 applied; V10 adds `sentiment_snapshots` + `llm_budget_daily` tables for the sentiment pipeline)
 - **Lombok** — boilerplate reduction
 - **Spock 2.4-M4 + Groovy** — test framework (project standard — use Spock for all new tests)
 - **Base package:** `com.stefo.revolut_trading_bot`
@@ -38,10 +38,10 @@ The fundamental unit is the **quadruple `(pair, strategy, interval, vehicle)`** 
 
 **Current configuration:**
 - **Pairs:** BTC-EUR, ETH-EUR, SOL-EUR
-- **Strategies:** 13 (see list below)
+- **Strategies:** 16 (13 TA + 3 sentiment; see list below)
 - **Intervals:** 15m, 1h, 4h, 1d, 1w
 
-This gives **195 independent virtual portfolios** all running on the same 30-second heartbeat.
+This gives **240 independent virtual portfolios** all running on the same 30-second heartbeat.
 
 **Balance sharing:** balances are keyed by `(pair, strategy)` and shared across intervals. Positions, trades, risk checks, and P&L are isolated per interval.
 
@@ -74,7 +74,7 @@ com.stefo.revolut_trading_bot/
 
 ---
 
-## Strategies (13 total)
+## Strategies (16 total)
 
 All implement `TradingStrategy`, are `@Component` beans, and are autowired into `SignalEngine` via `List<TradingStrategy>`. The `Signal` record's `emaShort`/`emaLong`/`rsi` fields carry the most useful indicator values for each strategy (repurposed for display).
 
@@ -93,6 +93,15 @@ All implement `TradingStrategy`, are `@Component` beans, and are autowired into 
 | `DONCHIAN` | Donchian Breakout | Price breaking 20-bar high/low |
 | `ICHIMOKU` | Ichimoku Cloud | TK cross + price above/below cloud |
 | `SUPERTREND` | Supertrend | Supertrend line flip |
+| `REDDIT_SENTIMENT` | Reddit Sentiment | Windowed Claude Haiku score ±0.35 (opt-in, needs scraper + API key) |
+| `CRYPTOPANIC_SENTIMENT` | CryptoPanic Sentiment | Vote-derived score ±0.35 (opt-in, no LLM) |
+| `COMBINED_SENTIMENT` | Combined Sentiment | Sample-weighted blend, require-agreement filter, ±0.40 |
+
+### Sentiment pipeline
+
+The three sentiment strategies share one ingest path. Outbound fetching from Reddit/CryptoPanic happens in the **`scrapers/sentiment-scraper/`** Python microservice — Java is a receiver. See `../CLAUDE.md` for the architecture overview. The pipeline is opt-in: `sentiment.enabled: false` by default; when disabled, ingest returns 503 and all three strategies return HOLD.
+
+Budget: `LlmBudgetTracker` hard-caps Haiku spend at `€3/month` (see `sentiment.classifier.monthly-budget-usd`). Persistent state in `trading.llm_budget_daily` survives restarts.
 
 ---
 
@@ -233,6 +242,9 @@ All at `http://localhost:8089/api`. See `API_CONTRACT.md` for full field-level d
 | GET | `/api/activity?limit=&types=` | Bot event audit trail |
 | GET | `/api/candles?pair=&interval=&limit=` | Cached candlestick data |
 | GET | `/api/market/fear-greed` | Fear & Greed Index (1h in-memory cache, not persisted) |
+| GET | `/api/market/sentiment?pair=&source=&interval=` | Windowed Reddit/CryptoPanic/combined aggregate |
+| POST | `/api/sentiment/ingest/reddit` | Scraper push — Bearer-authed, `RedditIngestRequest` body |
+| POST | `/api/sentiment/ingest/cryptopanic` | Scraper push — Bearer-authed, `CryptoPanicIngestRequest` body |
 
 When `?pair=` is omitted → defaults to first configured pair (`BTC-EUR`).
 When `?interval=` is omitted → defaults to first configured interval (`15m`).

@@ -115,6 +115,49 @@ trading:
     excluded-strategies: [PARABOLIC_SAR, MACD]  # fee-victim strategies — block new leveraged opens, SPOT unaffected
     cooldown-minutes: 30             # block re-opens on same (pair, interval, strategy, vehicle) after a close
 
+sentiment:
+  enabled: true                        # opt-in per environment — flip to true once scraper is deployed + classifier key set
+  ingest:
+    auth-token: ${SENTIMENT_INGEST_TOKEN:}   # shared secret — scraper presents this as Bearer token; empty = endpoint disabled
+    max-batch-size: 200                      # ingest rejects oversized batches with 413
+  reddit-filters:                        # applied server-side before a post is sent to the Haiku classifier
+    # Tuned 2026-04-26: min-score 5→2, min-comments 3→0, max-age 24→72.
+    # Reddit's /new endpoint returns posts spanning multiple days on slower subs, so a 24h
+    # cap dropped 80%+. /new is unreliable as a "fresh feed" for these subs anyway —
+    # well-engaged older posts still reflect real recent sentiment.
+    # €3/mo cap protects against runaway cost.
+    min-score:    2                      # upvotes needed before classifying
+    min-comments: 0
+    max-age-hours: 72
+  classifier:
+    anthropic-api-key: ${ANTHROPIC_API_KEY:}
+    model: claude-haiku-4-5-20251001
+    batch-size: 20
+    monthly-budget-usd: 3.00            # ~€2.80 hard ceiling — strictly under €3/month
+    daily-budget-usd: 0.12               # soft-cap; monthly cap always wins
+    alert-at-monthly-pct: 80            # one-shot Telegram alert when crossed
+  windows:
+    # Tuned 2026-04-25 after first observation: real Reddit volume on BTC across the 4 subs is ~1 eligible post/hr,
+    # not the 10-50/hr the original draft assumed. Thresholds lowered ~10x so signals can actually fire.
+    "15m": { minutes: 60,    reddit-min-sample: 2,  cryptopanic-min-sample: 2,  combined-min-sample: 2  }
+    "1h":  { minutes: 240,   reddit-min-sample: 4,  cryptopanic-min-sample: 2,  combined-min-sample: 4  }
+    "4h":  { minutes: 960,   reddit-min-sample: 8,  cryptopanic-min-sample: 4,  combined-min-sample: 8  }
+    "1d":  { minutes: 4320,  reddit-min-sample: 20, cryptopanic-min-sample: 10, combined-min-sample: 20 }
+    "1w":  { minutes: 20160, reddit-min-sample: 50, cryptopanic-min-sample: 25, combined-min-sample: 50 }
+  strategies:
+    # Tuned 2026-04-25: ±0.20 (was ±0.35) — first-week measurement bar.
+    # Tighten back up after we see what sentiment magnitudes actually predict.
+    reddit:
+      buy-threshold:  0.20
+      sell-threshold: -0.20
+    cryptopanic:
+      buy-threshold:  0.20
+      sell-threshold: -0.20
+    combined:
+      buy-threshold:   0.25             # slightly higher bar for multi-source agreement
+      sell-threshold: -0.25
+      require-agreement: true           # HOLD if Reddit and CryptoPanic signs diverge
+
 revolut:
   api:
     base-url: https://revx.revolut.com/api/1.0

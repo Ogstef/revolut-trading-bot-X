@@ -97,4 +97,21 @@ public class AlertService {
     public void dailyPnlAlert(BigDecimal dailyPnl, BigDecimal threshold) {
         log.warn("[DAILY PNL ALERT] dailyPnl={} threshold={}", dailyPnl, threshold);
     }
+
+    // ─── LLM budget warnings ──────────────────────────────────────────────────
+
+    /**
+     * Fires once per month when the Haiku monthly spend crosses {@code alertPct}% of the hard cap.
+     * Idempotency (one-shot per month) is enforced by the caller, not here.
+     */
+    public void sentimentBudgetWarning(BigDecimal spentUsd, BigDecimal monthlyCapUsd, int alertPct) {
+        log.warn("[SENTIMENT BUDGET] monthly spend {} USD crossed {}% of cap {} USD",
+                spentUsd, alertPct, monthlyCapUsd);
+        if (telegramConfig.isSendErrorNotifications()) {
+            String message = String.format(
+                    "⚠️ Sentiment classifier at %d%%+ of monthly budget%nSpent: $%s / $%s cap",
+                    alertPct, spentUsd.toPlainString(), monthlyCapUsd.toPlainString());
+            telegramClient.sendMessage(message);
+        }
+    }
 }

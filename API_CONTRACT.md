@@ -31,7 +31,7 @@
 
 All enums are serialized as their **string name** (Jackson + JPA `@Enumerated(EnumType.STRING)`).
 
-### `StrategyType` (13 values)
+### `StrategyType` (16 values)
 
 | Enum name | Display name |
 |-----------|--------------|
@@ -48,6 +48,19 @@ All enums are serialized as their **string name** (Jackson + JPA `@Enumerated(En
 | `DONCHIAN` | Donchian Breakout |
 | `ICHIMOKU` | Ichimoku Cloud |
 | `SUPERTREND` | Supertrend |
+| `REDDIT_SENTIMENT` | Reddit Sentiment |
+| `CRYPTOPANIC_SENTIMENT` | CryptoPanic Sentiment |
+| `COMBINED_SENTIMENT` | Combined Sentiment |
+
+### `SentimentSource` (3 values)
+
+Used by `GET /api/market/sentiment?source=…`. `COMBINED` is computed in the service from `REDDIT` + `CRYPTOPANIC` — it is never persisted.
+
+| Enum name | Display name |
+|-----------|--------------|
+| `REDDIT` | Reddit |
+| `CRYPTOPANIC` | CryptoPanic |
+| `COMBINED` | Combined |
 
 ### Other enums
 
@@ -211,6 +224,14 @@ All endpoints in this section accept `?pair=&interval=` and scope the response t
 
 ### 4.6 Market
 
+#### `GET /api/market/sentiment`
+Query params:
+- `pair` (default `BTC-EUR`)
+- `interval` (optional, defaults to `trading.intervals[0]`)
+- `source` (`REDDIT` / `CRYPTOPANIC` / `COMBINED`; default `COMBINED`)
+
+Response: [`SentimentResponse`](#sentimentresponse) — windowed aggregate with sub-scores when `source=COMBINED`. UI polling: 2 min.
+
 #### `GET /api/market/fear-greed`
 - Response: [`FearGreedResponse`](#fearreedresponse) — or **`204 No Content`** if the upstream provider is unavailable
 - Backend caches the value for 1 hour
@@ -225,6 +246,22 @@ All endpoints in this section accept `?pair=&interval=` and scope the response t
 - Response: [`CandleBar[]`](#candlebar) — last `limit` candles in **ascending** time order
 - UI polling: 30s (`useCandles` — Charts tab)
 - `time` is **Unix epoch seconds** (not milliseconds) — format expected by lightweight-charts
+
+---
+
+### 4.9 Sentiment ingest (scraper → backend)
+
+Used by the standalone `scrapers/sentiment-scraper/` microservice. Both endpoints share:
+- **Auth:** `Authorization: Bearer ${sentiment.ingest.auth-token}`. Missing / mismatched → `401`.
+- **Kill switch:** when `sentiment.enabled: false` the filter returns `503` before parsing the body.
+- **Batch limits:** bodies with more than `sentiment.ingest.max-batch-size` posts return `413`.
+- Response: [`IngestResponse`](#ingestresponse)
+
+#### `POST /api/sentiment/ingest/reddit`
+Body: [`RedditIngestRequest`](#redditingestrequest). Server pre-filters (min-score, min-comments, max-age), dedups on `(source=REDDIT, external_id)`, classifies via Claude Haiku (budget-gated, hard cap €3/mo), persists one `sentiment_snapshot` per (post × pairHint).
+
+#### `POST /api/sentiment/ingest/cryptopanic`
+Body: [`CryptoPanicIngestRequest`](#cryptopanicingestrequest). Score = `(positive - negative) / max(positive + negative, 1)` ∈ [-1, +1]. Dedups on `(source=CRYPTOPANIC, external_id)`, persists one row per (post × currencyCode→pair).
 
 ---
 
@@ -552,6 +589,92 @@ Returned by `GET /api/candles`. Each element is one OHLCV bar for the requested 
 | `close` | number | Closing price |
 | `volume` | number | Volume in base asset |
 
+### `SentimentResponse`
+Response of `GET /api/market/sentiment`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `pair` | string | e.g. `"BTC-EUR"` |
+| `source` | `SentimentSource` | `REDDIT` / `CRYPTOPANIC` / `COMBINED` |
+| `interval` | string | The interval label actually used for the window (e.g. `"1h"`) |
+| `score` | number \| null | [-1, +1], volume-weighted mean; `null` when below `sampleSize` threshold |
+| `volume` | number | Sum of per-row volumes in the window (Reddit upvotes / CP vote totals) |
+| `sampleSize` | number | Row count in the window |
+| `capturedAt` | string (ISO 8601) | When the aggregate was computed (ISO instant) |
+| `stale` | boolean | `true` when sample fell below threshold and `score == null` |
+| `subScores` | `SentimentSubScore[] \| null` | Populated only when `source === "COMBINED"` |
+
+### `SentimentSubScore`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `source` | `SentimentSource` | `REDDIT` or `CRYPTOPANIC` |
+| `score` | number \| null | Per-source [-1, +1] |
+| `volume` | number | |
+| `sampleSize` | number | |
+
+### `RedditPostDto`
+Nested inside `RedditIngestRequest`.
+
+| Field | Type | Validation | Notes |
+|-------|------|------------|-------|
+| `externalId` | string | required | Reddit post id, e.g. `"t3_abc123"` |
+| `subreddit` | string | required | |
+| `title` | string | required | |
+| `body` | string | | Selftext; may be empty |
+| `score` | int | ≥ 0 | Reddit upvotes |
+| `numComments` | int | ≥ 0 | |
+| `createdUtc` | string (ISO 8601) | required | |
+| `permalink` | string | required | |
+| `pairHints` | `string[]` | required | e.g. `["BTC-EUR", "ETH-EUR"]`; empty for generic posts |
+
+### `RedditIngestRequest`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `posts` | `RedditPostDto[]` | up to `sentiment.ingest.max-batch-size` |
+| `scrapedAt` | string (ISO 8601 instant) | |
+
+### `CryptoPanicVotesDto`
+All fields default to 0; the derived score treats zero-vote posts as neutral.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `positive` | int | ≥ 0 |
+| `negative` | int | ≥ 0 |
+| `important` | int | ≥ 0 |
+| `liked` | int | ≥ 0 |
+| `disliked` | int | ≥ 0 |
+
+### `CryptoPanicPostDto`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `externalId` | string | required |
+| `title` | string | required |
+| `url` | string | required |
+| `votes` | `CryptoPanicVotesDto` | required |
+| `currencyCodes` | `string[]` | uppercase tickers, e.g. `["BTC", "ETH"]` |
+| `publishedAt` | string (ISO 8601) | required |
+
+### `CryptoPanicIngestRequest`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `posts` | `CryptoPanicPostDto[]` | up to `sentiment.ingest.max-batch-size` |
+| `scrapedAt` | string (ISO 8601 instant) | |
+
+### `IngestResponse`
+Returned from both ingest endpoints. `received == accepted + deduped + filtered`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `received` | int | Posts in the request |
+| `accepted` | int | Posts that became at least one DB row |
+| `deduped` | int | Posts skipped because already present |
+| `filtered` | int | Posts dropped by pre-filter (Reddit: min-score / min-comments / max-age; CryptoPanic: unknown currency) |
+| `classified` | int | Posts that reached the Haiku classifier; always 0 for CryptoPanic |
+
 ---
 
 ## 6. Strategy-specific indicator overloading
@@ -573,6 +696,9 @@ Returned by `GET /api/candles`. Each element is one OHLCV bar for the requested 
 | `DONCHIAN` | Upper channel | Lower channel | Width % |
 | `ICHIMOKU` | Tenkan-sen | Kijun-sen | Span A |
 | `SUPERTREND` | Supertrend line | ATR value | Distance % `(close − supertrend) / close × 100` (positive = bullish) |
+| `REDDIT_SENTIMENT` | Aggregate score [-1, +1] | Window volume (upvotes) | Sample size (# posts) |
+| `CRYPTOPANIC_SENTIMENT` | Aggregate score [-1, +1] | Window volume (vote totals) | Sample size (# posts) |
+| `COMBINED_SENTIMENT` | Blended score [-1, +1] | Total volume across sources | 0 = sources agree, 1 = disagree |
 
 If you add a new strategy, update **both** the backend signal builder and this mapping.
 
@@ -599,6 +725,8 @@ Used by backend to estimate read load.
 | `GET /api/strategies/{n}/trades` (fanned × 5 intervals) | 30s | `useAllIntervalTrades` (Cross-Interval tab) |
 | `GET /api/activity` | 15s | `useActivityFeed` (Activity tab) |
 | `GET /api/market/fear-greed` | 5 min | `useFearGreed` |
+| `GET /api/market/sentiment` | 2 min | `useSentiment` |
+| `POST /api/sentiment/ingest/{reddit,cryptopanic}` | scraper-driven (5 / 15 min) | external `sentiment-scraper` microservice |
 | `GET /api/candles` | 30s | `useCandles` (Charts tab) |
 | `GET /api/pairs`, `GET /api/intervals` | once (static) | `usePairs`, `useIntervals` |
 

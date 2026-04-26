@@ -15,6 +15,7 @@ import com.stefo.revolut_trading_bot.service.ConfigService
 import com.stefo.revolut_trading_bot.service.BotEventService
 import com.stefo.revolut_trading_bot.service.FearGreedService
 import com.stefo.revolut_trading_bot.service.PositionService
+import com.stefo.revolut_trading_bot.service.SentimentService
 import com.stefo.revolut_trading_bot.service.SignalService
 import com.stefo.revolut_trading_bot.service.StatsAggregationService
 import com.stefo.revolut_trading_bot.service.StrategyService
@@ -44,13 +45,15 @@ class DashboardControllerHistorySpec extends Specification {
     StatsAggregationService  statsAggregationService  = Mock()
     BotEventService          botEventService          = Mock()
     CandlestickRepository    candlestickRepository    = Mock()
+    SentimentService         sentimentService         = Mock()
 
     @Subject
     DashboardController controller = new DashboardController(
             botStateService, tradingConfig, tradeService, tradeRepository,
             alertService, botStatusService, positionService, configService,
             strategyService, signalService, fearGreedService,
-            statsAggregationService, botEventService, candlestickRepository)
+            statsAggregationService, botEventService, candlestickRepository,
+            sentimentService)
 
     def setup() {
         tradingConfig.primaryPair()     >> "BTC-EUR"

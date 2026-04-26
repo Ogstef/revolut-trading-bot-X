@@ -55,6 +55,7 @@ public class DashboardController {
     private final StatsAggregationService statsAggregationService;
     private final BotEventService botEventService;
     private final CandlestickRepository candlestickRepository;
+    private final SentimentService sentimentService;
 
     // ─── Status ───────────────────────────────────────────────────────────────
 
@@ -424,5 +425,44 @@ public class DashboardController {
         FearGreedResponse result = fearGreedService.get();
         if (result == null) return ResponseEntity.noContent().build();
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * Windowed sentiment aggregate for a pair + source. ?interval= controls the
+     * lookback window; ?source= picks REDDIT / CRYPTOPANIC / COMBINED (default COMBINED).
+     * GET /api/market/sentiment?pair=BTC-EUR&source=COMBINED&interval=1h
+     */
+    @GetMapping("/market/sentiment")
+    public ResponseEntity<SentimentResponse> sentiment(
+            @RequestParam(defaultValue = "BTC-EUR") String pair,
+            @RequestParam(required = false) String interval,
+            @RequestParam(defaultValue = "COMBINED")
+                    com.stefo.revolut_trading_bot.model.enums.SentimentSource source) {
+
+        String resolvedInterval = (interval != null && !interval.isBlank())
+                ? interval : tradingConfig.primaryInterval();
+        com.stefo.revolut_trading_bot.model.dto.SentimentScore score =
+                sentimentService.scoreFor(pair, resolvedInterval, source);
+
+        java.util.List<SentimentResponse.SubScore> subScores = null;
+        if (source == com.stefo.revolut_trading_bot.model.enums.SentimentSource.COMBINED
+                && !score.components().isEmpty()) {
+            subScores = score.components().stream()
+                    .map(c -> new SentimentResponse.SubScore(
+                            c.source(), c.score(), c.volume(), c.sampleSize()))
+                    .toList();
+        }
+        SentimentResponse response = new SentimentResponse(
+                pair,
+                source,
+                resolvedInterval,
+                score.score(),
+                score.volume(),
+                score.sampleSize(),
+                score.computedAt(),
+                !score.hasSignal(),
+                subScores
+        );
+        return ResponseEntity.ok(response);
     }
 }

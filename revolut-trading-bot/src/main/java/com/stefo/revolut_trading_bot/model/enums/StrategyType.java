@@ -28,7 +28,11 @@ public enum StrategyType {
     MFI("Money Flow Index"),
     DONCHIAN("Donchian Breakout"),
     ICHIMOKU("Ichimoku Cloud"),
-    SUPERTREND("Supertrend");
+    SUPERTREND("Supertrend"),
+    // Phase 14 — sentiment (news + social)
+    REDDIT_SENTIMENT("Reddit Sentiment"),
+    CRYPTOPANIC_SENTIMENT("CryptoPanic Sentiment"),
+    COMBINED_SENTIMENT("Combined Sentiment");
 
     /** Human-readable label used in logs and API responses. */
     private final String displayName;
