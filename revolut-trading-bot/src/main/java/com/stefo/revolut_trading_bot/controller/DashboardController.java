@@ -19,8 +19,10 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -55,6 +57,7 @@ public class DashboardController {
     private final BotEventService botEventService;
     private final CandlestickRepository candlestickRepository;
     private final SentimentService sentimentService;
+    private final TripleConfigService tripleConfigService;
 
     // ─── Status ───────────────────────────────────────────────────────────────
 
@@ -245,6 +248,48 @@ public class DashboardController {
     @GetMapping("/stats/all-triples")
     public ResponseEntity<List<TripleStats>> allTripleStats() {
         return ResponseEntity.ok(statsAggregationService.getAllTripleStats());
+    }
+
+    // ─── Triple enable/disable ────────────────────────────────────────────────
+
+    @GetMapping("/triples/disabled")
+    public ResponseEntity<List<DisabledTripleResponse>> disabledTriples() {
+        return ResponseEntity.ok(tripleConfigService.listDisabled().stream()
+                .map(DisabledTripleResponse::from)
+                .toList());
+    }
+
+    @PostMapping("/triples/{pair}/{strategy}/{interval}/disable")
+    public ResponseEntity<DisabledTripleResponse> disableTriple(
+            @PathVariable String pair,
+            @PathVariable StrategyType strategy,
+            @PathVariable String interval,
+            @RequestBody(required = false) TripleDisableRequest body) {
+        validateTripleArgs(pair, interval);
+        String reason = body == null ? null : body.reason();
+        var saved = tripleConfigService.disable(pair, interval, strategy, reason);
+        return ResponseEntity.ok(DisabledTripleResponse.from(saved));
+    }
+
+    @PostMapping("/triples/{pair}/{strategy}/{interval}/enable")
+    public ResponseEntity<String> enableTriple(
+            @PathVariable String pair,
+            @PathVariable StrategyType strategy,
+            @PathVariable String interval) {
+        validateTripleArgs(pair, interval);
+        tripleConfigService.enable(pair, interval, strategy);
+        return ResponseEntity.ok("Triple enabled — new entries allowed on the next cycle.");
+    }
+
+    private void validateTripleArgs(String pair, String interval) {
+        if (!tradingConfig.getPairs().contains(pair)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown pair: " + pair
+                    + " (configured: " + tradingConfig.getPairs() + ")");
+        }
+        if (!tradingConfig.intervalLabels().contains(interval)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown interval: " + interval
+                    + " (configured: " + tradingConfig.intervalLabels() + ")");
+        }
     }
 
     // ─── Activity feed ────────────────────────────────────────────────────────

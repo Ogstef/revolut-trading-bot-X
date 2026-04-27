@@ -22,5 +22,6 @@ public record TripleStats(
         BigDecimal netPnl,
         BigDecimal totalCosts,
         BigDecimal feeDragPct,
-        BigDecimal netExpectancy
+        BigDecimal netExpectancy,
+        boolean enabled
 ) {}

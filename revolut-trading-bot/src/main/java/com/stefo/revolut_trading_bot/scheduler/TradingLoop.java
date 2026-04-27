@@ -8,6 +8,7 @@ import com.stefo.revolut_trading_bot.market.MarketDataService;
 import com.stefo.revolut_trading_bot.model.dto.BalanceResponse;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import com.stefo.revolut_trading_bot.risk.RiskManager;
+import com.stefo.revolut_trading_bot.service.TripleConfigService;
 import com.stefo.revolut_trading_bot.strategy.Signal;
 import com.stefo.revolut_trading_bot.strategy.SignalEngine;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +49,7 @@ public class TradingLoop {
     private final TradingConfig                tradingConfig;
     private final BotStateService              botStateService;
     private final AlertService                 alertService;
+    private final TripleConfigService          tripleConfigService;
 
     @Scheduled(fixedDelayString = "#{${trading.polling-interval-seconds:30} * 1000}")
     public void run() {
@@ -121,6 +123,13 @@ public class TradingLoop {
                     + " openPositions=" + riskStatus.openPositions()
                     + " dailyPnl=" + riskStatus.dailyPnl()
                     + " consecutiveLosses=" + riskStatus.consecutiveLosses());
+            return;
+        }
+
+        // Soft-disable: monitorPositions above stays armed (TP/SL still triggers
+        // on existing positions); only NEW entries are blocked here.
+        if (!tripleConfigService.isEnabled(pair, interval, strategyName)) {
+            log.info("[{}][{}][{}] Triple disabled — skipping new-entry execution", pair, interval, strategyName);
             return;
         }
 

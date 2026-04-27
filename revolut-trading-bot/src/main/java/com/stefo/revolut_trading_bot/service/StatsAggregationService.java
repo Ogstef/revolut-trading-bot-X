@@ -29,6 +29,7 @@ public class StatsAggregationService {
     private final TradingConfig tradingConfig;
     private final SignalEngine signalEngine;
     private final RiskManager riskManager;
+    private final TripleConfigService tripleConfigService;
 
     public List<TripleStats> getAllTripleStats() {
         Map<String, TradeAgg> tradeAggByKey = new HashMap<>();
@@ -130,7 +131,8 @@ public class StatsAggregationService {
                             agg.totalNetPnl.setScale(2, RoundingMode.HALF_UP),
                             agg.totalCosts.setScale(2, RoundingMode.HALF_UP),
                             feeDragPct,
-                            netExpectancy
+                            netExpectancy,
+                            tripleConfigService.isEnabled(pair, interval, strategy)
                     ));
                 }
             }

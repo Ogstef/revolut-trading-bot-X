@@ -7,5 +7,6 @@ public enum BotEventType {
     CIRCUIT_BREAKER_RESET,
     BOT_STOPPED,
     BOT_RESUMED,
-    CONFIG_CHANGED
+    CONFIG_CHANGED,
+    TRIPLE_TOGGLED
 }

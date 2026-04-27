@@ -118,6 +118,22 @@ public class BotEventService {
                 .build());
     }
 
+    public void recordTripleToggled(String pair, String interval, StrategyType strategy,
+                                    boolean enabled, String reason) {
+        String verb = enabled ? "enabled" : "disabled";
+        String title = "Triple " + verb + " — " + strategy + " " + pair + " " + interval;
+        String detail = enabled
+                ? "Re-enabled — new entries allowed again."
+                : "Disabled — new entries blocked. Reason: " + (reason == null ? "—" : reason);
+        saveSafely(BotEvent.builder()
+                .type(BotEventType.TRIPLE_TOGGLED)
+                .severity(BotEventSeverity.INFO)
+                .pair(pair).interval(interval).strategy(strategy.name())
+                .title(title)
+                .detail(detail)
+                .build());
+    }
+
     public List<BotEvent> recent(int limit, Set<BotEventType> typeFilter) {
         PageRequest page = PageRequest.of(0, Math.min(Math.max(limit, 1), 500));
         if (typeFilter == null || typeFilter.isEmpty()) {

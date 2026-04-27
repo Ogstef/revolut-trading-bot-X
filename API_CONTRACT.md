@@ -69,7 +69,7 @@ Used by `GET /api/market/sentiment?source=…`. `COMBINED` is computed in the se
 | `OrderStatus` | `OPEN`, `CLOSED` |
 | `TradingMode` | `PAPER`, `LIVE` |
 | `Trade.exitReason` (free-form string) | `TP_HIT`, `SL_HIT`, `SIGNAL_EXIT`, `MANUAL` |
-| `BotEventType` | `POSITION_OPENED`, `POSITION_CLOSED`, `CIRCUIT_BREAKER_TRIPPED`, `CIRCUIT_BREAKER_RESET`, `BOT_STOPPED`, `BOT_RESUMED`, `CONFIG_CHANGED` |
+| `BotEventType` | `POSITION_OPENED`, `POSITION_CLOSED`, `CIRCUIT_BREAKER_TRIPPED`, `CIRCUIT_BREAKER_RESET`, `BOT_STOPPED`, `BOT_RESUMED`, `CONFIG_CHANGED`, `TRIPLE_TOGGLED` |
 | `BotEventSeverity` | `INFO`, `WARNING`, `CRITICAL` |
 
 ### Format conventions
@@ -199,7 +199,31 @@ All endpoints in this section accept `?pair=&interval=` and scope the response t
 - Query: none
 - Response: [`TripleStats[]`](#triplestats) — one row per configured `(pair, interval, strategy)` triple. Total rows = `pairs × intervals × strategies` (currently 180). Empty triples (no closed trades) are returned with zeroed numeric fields.
 - Backed by one `GROUP BY (pair, interval, strategy_name)` aggregate over `trading.trades`, plus the existing `PositionRepository.countByStatusGroupedByPairIntervalStrategy(OPEN)` rollup, joined client-side in `StatsAggregationService`.
+- The `enabled` field on each row is read from `TripleConfigService` — sparse mirror of `trading.disabled_triples`.
 - UI polling: 30s (Leaderboard tab)
+
+---
+
+### 4.4½ Triple enable/disable
+
+Per-triple soft-disable. `disable` blocks NEW entries on the next cycle; existing positions keep their TP/SL monitor and exit naturally. State persists in `trading.disabled_triples`.
+
+#### `GET /api/triples/disabled`
+- Query: none
+- Response: [`DisabledTripleResponse[]`](#disabledtripleresponse) — only currently-disabled triples, newest first.
+
+#### `POST /api/triples/{pair}/{strategy}/{interval}/disable`
+- Path: `pair` (e.g. `BTC-EUR`), `strategy` ([`StrategyType`](#strategytype-16-values) enum name), `interval` (e.g. `15m`).
+- Body: optional [`TripleDisableRequest`](#tripledisablerequest) — `{ "reason": "..." }` (free-form audit text).
+- Response: [`DisabledTripleResponse`](#disabledtripleresponse) for the newly-disabled row.
+- 400 if `pair` is not in `trading.pairs` or `interval` is not in `trading.intervals`.
+- Idempotent on the cache; the DB row is updated/replaced if the triple was already disabled.
+
+#### `POST /api/triples/{pair}/{strategy}/{interval}/enable`
+- Path: same as `/disable`.
+- Body: none.
+- Response: plain text confirmation.
+- 400 on unknown `pair`/`interval`. Idempotent — re-enabling an already-enabled triple is a no-op.
 
 ---
 
@@ -516,6 +540,27 @@ Returned by `GET /api/stats/all-triples`. One row per configured `(pair, interva
 | `totalCosts` | number | no | Sum of all fees and slippage for this triple |
 | `feeDragPct` | number | no | `totalCosts / |totalPnl| × 100`. 0 when no costs or no gross PnL. |
 | `netExpectancy` | number | no | Net expectancy in EUR/trade |
+| `enabled` | boolean | no | `false` when the triple is currently soft-disabled (no new entries; existing positions still monitored). Sourced from `trading.disabled_triples` via `TripleConfigService`. |
+
+### `TripleDisableRequest`
+
+Optional request body for `POST /api/triples/{pair}/{strategy}/{interval}/disable`.
+
+| Field | JSON type | Nullable | Notes |
+|-------|-----------|----------|-------|
+| `reason` | string | yes | Free-form audit text. Surfaces in `/api/triples/disabled` and the `bot_events` activity feed. |
+
+### `DisabledTripleResponse`
+
+Returned by `GET /api/triples/disabled` and `POST /api/triples/.../disable`.
+
+| Field | JSON type | Nullable | Notes |
+|-------|-----------|----------|-------|
+| `pair` | string | no | e.g. `"BTC-EUR"` |
+| `strategy` | string | no | `StrategyType` enum name |
+| `interval` | string | no | e.g. `"15m"` |
+| `disabledAt` | string (ISO 8601) | no | UTC timestamp when the row was inserted. |
+| `reason` | string | yes | Free-form text supplied at disable time. |
 
 ### `BotEvent`
 

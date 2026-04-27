@@ -21,6 +21,7 @@ import com.stefo.revolut_trading_bot.service.SentimentService
 import com.stefo.revolut_trading_bot.service.SignalService
 import com.stefo.revolut_trading_bot.service.StatsAggregationService
 import com.stefo.revolut_trading_bot.service.StrategyService
+import com.stefo.revolut_trading_bot.service.TripleConfigService
 import org.springframework.http.HttpStatus
 import spock.lang.Specification
 import spock.lang.Subject
@@ -52,6 +53,7 @@ class DashboardControllerSpec extends Specification {
     BotEventService          botEventService          = Mock()
     CandlestickRepository    candlestickRepository    = Mock()
     SentimentService         sentimentService         = Mock()
+    TripleConfigService      tripleConfigService      = Mock()
 
     @Subject
     DashboardController controller = new DashboardController(
@@ -59,7 +61,7 @@ class DashboardControllerSpec extends Specification {
             alertService, botStatusService, positionService, configService,
             strategyService, signalService, fearGreedService,
             statsAggregationService, botEventService, candlestickRepository,
-            sentimentService)
+            sentimentService, tripleConfigService)
 
     def setup() {
         tradingConfig.primaryPair()     >> "BTC-EUR"
