@@ -27,6 +27,7 @@ class RiskManagerSpec extends Specification {
 
     def "approved when all risk checks pass"() {
         given:
+        positionRepository.findLatestOpenedAt(_, _, _) >> Optional.empty()
         positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
         tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
         tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> []
@@ -41,6 +42,7 @@ class RiskManagerSpec extends Specification {
 
     def "rejected when max concurrent positions reached"() {
         given: "already at the position cap (3)"
+        positionRepository.findLatestOpenedAt(_, _, _) >> Optional.empty()
         positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 3
 
         when:
@@ -53,6 +55,7 @@ class RiskManagerSpec extends Specification {
 
     def "rejected when daily loss breaches circuit breaker"() {
         given:
+        positionRepository.findLatestOpenedAt(_, _, _) >> Optional.empty()
         positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
         // Daily PnL is -600 EUR, threshold is -5% of 10_000 = -500 EUR
         tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.valueOf(-600)
@@ -67,6 +70,7 @@ class RiskManagerSpec extends Specification {
 
     def "rejected when consecutive loss circuit breaker trips"() {
         given:
+        positionRepository.findLatestOpenedAt(_, _, _) >> Optional.empty()
         positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
         tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
         tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> [
@@ -83,6 +87,7 @@ class RiskManagerSpec extends Specification {
 
     def "consecutive loss count stops at first winning trade"() {
         given: "2 losses followed by a win and 2 more losses — count must be 2 not 4"
+        positionRepository.findLatestOpenedAt(_, _, _) >> Optional.empty()
         positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
         tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
         tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> [
@@ -98,6 +103,7 @@ class RiskManagerSpec extends Specification {
 
     def "position size is 2% of available balance"() {
         given:
+        positionRepository.findLatestOpenedAt(_, _, _) >> Optional.empty()
         positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
         tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
         tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> []
@@ -112,6 +118,7 @@ class RiskManagerSpec extends Specification {
 
     def "legacy validate() delegates to validateForStrategy with primary pair and null strategy"() {
         given:
+        positionRepository.findLatestOpenedAt(_, _, _) >> Optional.empty()
         positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, null) >> 0
         tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, null) >> BigDecimal.ZERO
         tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, null, 5) >> []
@@ -121,6 +128,63 @@ class RiskManagerSpec extends Specification {
 
         then:
         result.approved()
+    }
+
+    // ─── Bar cooldown ─────────────────────────────────────────────────────────
+
+    def "first-ever entry passes the bar cooldown (no prior position exists)"() {
+        given: "explicit empty Optional from the new repo query"
+        positionRepository.findLatestOpenedAt("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER) >> Optional.empty()
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> []
+
+        when:
+        def result = riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", "15m", StrategyType.EMA_CROSSOVER)
+
+        then:
+        result.approved()
+    }
+
+    def "rejected when last entry is in the same 15m bar — the stacking bug fix"() {
+        given: "an entry was opened just now (definitely in the current 15m bar)"
+        positionRepository.findLatestOpenedAt(_, _, _) >>
+                Optional.of(LocalDateTime.now())
+
+        when:
+        def result = riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", "15m", StrategyType.EMA_CROSSOVER)
+
+        then:
+        !result.approved()
+        result.reason().startsWith("Bar cooldown active")
+    }
+
+    def "passes cooldown when last entry was 20 minutes ago on a 15m bar (next bar already closed)"() {
+        given: "20 min ago is past at least one 15m bar boundary"
+        positionRepository.findLatestOpenedAt("BTC-EUR", "15m", StrategyType.EMA_CROSSOVER) >>
+                Optional.of(LocalDateTime.now().minusMinutes(20))
+        positionRepository.countByStatusAndPairAndIntervalAndStrategyName(OrderStatus.OPEN, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> 0
+        tradeRepository.sumPnlSinceAndPairAndIntervalAndStrategy(_ as LocalDateTime, "BTC-EUR", _, StrategyType.EMA_CROSSOVER) >> BigDecimal.ZERO
+        tradeRepository.findRecentTradesByPairAndIntervalAndStrategy("BTC-EUR", _, StrategyType.EMA_CROSSOVER, 5) >> []
+
+        when:
+        def result = riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", "15m", StrategyType.EMA_CROSSOVER)
+
+        then:
+        result.approved()
+    }
+
+    def "1h cooldown rejects entry within the same 1h bar"() {
+        given: "an entry was opened just now — definitely inside the current 1h bar"
+        positionRepository.findLatestOpenedAt(_, _, _) >>
+                Optional.of(LocalDateTime.now())
+
+        when:
+        def result = riskManager.validateForStrategy(BigDecimal.valueOf(10_000), "BTC-EUR", "1h", StrategyType.RSI_MOMENTUM)
+
+        then:
+        !result.approved()
+        result.reason().startsWith("Bar cooldown active")
     }
 
     // ─── currentStatusForStrategy ─────────────────────────────────────────────

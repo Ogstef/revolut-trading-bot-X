@@ -8,7 +8,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface PositionRepository extends JpaRepository<Position, Long> {
@@ -56,4 +58,22 @@ public interface PositionRepository extends JpaRepository<Position, Long> {
             GROUP BY p.pair, p.interval, p.strategyName
             """)
     List<Object[]> countByStatusGroupedByPairIntervalStrategy(@Param("status") OrderStatus status);
+
+    /**
+     * Latest opened_at across BOTH open and closed positions for the triple.
+     * Used by RiskManager's bar cooldown — gates new entries until the next
+     * bar boundary after the most recent entry, preventing the polling-rate
+     * stack-on-same-signal bug.
+     */
+    @Query("""
+            SELECT MAX(p.openedAt)
+              FROM Position p
+             WHERE p.pair         = :pair
+               AND p.interval     = :interval
+               AND p.strategyName = :strategy
+            """)
+    Optional<LocalDateTime> findLatestOpenedAt(
+            @Param("pair")     String pair,
+            @Param("interval") String interval,
+            @Param("strategy") StrategyType strategy);
 }

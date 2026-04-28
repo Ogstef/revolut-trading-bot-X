@@ -14,11 +14,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -64,6 +67,24 @@ public class RiskManager {
                                                     String interval,
                                                     StrategyType strategyType) {
         TradingConfig.Risk risk = config.getRisk();
+
+        // 0. Bar cooldown — prevents stacking entries on the same signal observation.
+        //    Polling runs every 30s but indicator values only refresh when a new bar closes;
+        //    without this gate, a persistent BUY signal opens N entries in the same bar
+        //    at near-identical prices (one bet sized N×, not N decisions).
+        Optional<LocalDateTime> latestEntry = positionRepository
+                .findLatestOpenedAt(pair, interval, strategyType);
+        if (latestEntry.isPresent()) {
+            Duration barDuration = barDurationOf(interval);
+            LocalDateTime cooldownExpiresAt = nextBarBoundary(latestEntry.get(), barDuration);
+            if (LocalDateTime.now().isBefore(cooldownExpiresAt)) {
+                String reason = String.format(
+                        "Bar cooldown active — last entry %s; next bar closes %s [pair=%s interval=%s strategy=%s]",
+                        latestEntry.get(), cooldownExpiresAt, pair, interval, strategyType);
+                log.info("Risk rejected: {}", reason);
+                return RiskValidationResult.rejected(reason);
+            }
+        }
 
         // 1. Concurrent positions cap — scoped to (pair, interval, strategy)
         long openPositions = positionRepository
@@ -326,4 +347,29 @@ public class RiskManager {
             Map<Key, BigDecimal> dailyPnls,
             Map<Key, Integer> consecutiveLosses
     ) {}
+
+    // ─── Bar-cooldown helpers ─────────────────────────────────────────────────
+
+    private static Duration barDurationOf(String intervalLabel) {
+        return switch (intervalLabel) {
+            case "15m" -> Duration.ofMinutes(15);
+            case "1h"  -> Duration.ofHours(1);
+            case "4h"  -> Duration.ofHours(4);
+            case "1d"  -> Duration.ofDays(1);
+            case "1w"  -> Duration.ofDays(7);
+            default    -> throw new IllegalArgumentException("Unknown interval label: " + intervalLabel);
+        };
+    }
+
+    /**
+     * The next bar boundary AFTER {@code t}, aligned to UTC epoch seconds —
+     * matches the candlestick {@code endTime} convention used elsewhere.
+     */
+    private static LocalDateTime nextBarBoundary(LocalDateTime t, Duration bar) {
+        long epochSecond = t.toEpochSecond(ZoneOffset.UTC);
+        long barSeconds = bar.toSeconds();
+        long currentBarStart = (epochSecond / barSeconds) * barSeconds;
+        long nextBarStart = currentBarStart + barSeconds;
+        return LocalDateTime.ofEpochSecond(nextBarStart, 0, ZoneOffset.UTC);
+    }
 }
