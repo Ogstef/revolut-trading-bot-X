@@ -26,6 +26,10 @@ public class RevolutApiClient {
     private static final String HEADER_TIMESTAMP = "X-Revx-Timestamp";
     private static final String HEADER_SIGNATURE = "X-Revx-Signature";
 
+    // Backdate to stay safely behind Revolut's "future timestamp" rejection window
+    // when our local clock drifts slightly ahead of theirs.
+    private static final long TIMESTAMP_BACKDATE_MS = 500L;
+
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final RevolutApiConfig apiConfig;
@@ -54,7 +58,7 @@ public class RevolutApiClient {
 
     public <T> T getAuthenticated(String path, String queryString, TypeReference<T> typeRef) {
         String url = buildUrl(path, queryString);
-        long timestamp = System.currentTimeMillis();
+        long timestamp = System.currentTimeMillis() - TIMESTAMP_BACKDATE_MS;
 
         String fullPath = fullPath(path);
         String message = signingService.buildSignatureMessage(timestamp, "GET", fullPath, queryString, null);
@@ -73,7 +77,7 @@ public class RevolutApiClient {
     public <T> T postAuthenticated(String path, Object body, TypeReference<T> typeRef) {
         try {
             String bodyJson = objectMapper.writeValueAsString(body);
-            long timestamp = System.currentTimeMillis();
+            long timestamp = System.currentTimeMillis() - TIMESTAMP_BACKDATE_MS;
 
             String message = signingService.buildSignatureMessage(timestamp, "POST", fullPath(path), null, bodyJson);
             String signature = signingService.sign(message);
@@ -92,7 +96,7 @@ public class RevolutApiClient {
     }
 
     public void deleteAuthenticated(String path) {
-        long timestamp = System.currentTimeMillis();
+        long timestamp = System.currentTimeMillis() - TIMESTAMP_BACKDATE_MS;
 
         String message = signingService.buildSignatureMessage(timestamp, "DELETE", fullPath(path), null, null);
         String signature = signingService.sign(message);
