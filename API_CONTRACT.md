@@ -293,6 +293,39 @@ These endpoints predate multi-interval support and are retained for back-compat.
 
 ---
 
+### 4.10 Backtesting
+
+Replays historical candles from `trading.candlesticks` through the live strategy code, applying the same fee + slippage cost model as the paper trader. Every run is persisted in `trading.backtest_runs` (JSONB columns for `params`, `stats`, `trades`, `equity_curve`).
+
+#### `POST /api/backtest/run`
+- Body: [`BacktestRequest`](#backtestrequest)
+- Response: [`BacktestRunDetail`](#backtestrundetail) — full result including the trade list and equity curve.
+- 400 on unknown pair / interval, end_date ≤ start_date, or fewer than 30 candles in window.
+- Synchronous; a 90-day single-triple run completes in well under 1 second.
+
+#### `POST /api/backtest/walk-forward`
+- Body: `{ "request": BacktestRequest, "windows": int (default 3, range [2, 10]) }`
+- Splits `[startDate, endDate]` into `windows` equal sub-ranges, runs the same config on each, persists each as its own row in `trading.backtest_runs`.
+- Response: [`WalkForwardResult`](#walkforwardresult) — per-window summaries + variance metrics + a heuristic `STABLE` / `REGIME_DEPENDENT` / `WILDLY_VARYING` verdict on whether the edge is consistent.
+
+#### `GET /api/backtest/runs`
+- Query: `pair?`, `strategy?` ([`StrategyType`](#strategytype-16-values)), `interval?`, `limit?` (default 50, hard-capped at 200)
+- Response: [`BacktestRunSummary[]`](#backtestrunsummary) — newest first. No trades or equity curve in the payload.
+
+#### `GET /api/backtest/runs/{id}`
+- Path: UUID
+- Response: [`BacktestRunDetail`](#backtestrundetail) (same shape as POST `/run`)
+- 404 if not found.
+
+#### `DELETE /api/backtest/runs/{id}`
+- Removes the run row. 204 on success, 404 if not found (idempotent OK semantics if you prefer).
+
+#### `PATCH /api/backtest/runs/{id}`
+- Body: `{ "label"?: string, "notes"?: string }` — only the supplied keys are updated.
+- Response: [`BacktestRunSummary`](#backtestrunsummary)
+
+---
+
 ## 5. DTO schemas
 
 TypeScript types live in `revolut-trading-bot-ui/src/api/client.ts`. Java DTOs live in `revolut-trading-bot/src/main/java/com/stefo/revolut_trading_bot/model/dto/`.
@@ -698,6 +731,110 @@ Returned from both ingest endpoints. `received == accepted + deduped + filtered`
 | `deduped` | int | Posts skipped because already present |
 | `filtered` | int | Posts dropped by pre-filter (Reddit: min-score / min-comments / max-age; CryptoPanic: unknown currency) |
 | `classified` | int | Posts that reached the Haiku classifier; always 0 for CryptoPanic |
+
+### `BacktestRequest`
+
+Body of `POST /api/backtest/run`.
+
+| Field | JSON type | Nullable | Notes |
+|-------|-----------|----------|-------|
+| `pair` | string | no | e.g. `"BTC-EUR"` — must be in `trading.pairs` |
+| `strategy` | string | no | `StrategyType` enum name |
+| `interval` | string | no | e.g. `"15m"` |
+| `startDate` | string (ISO 8601, no TZ) | no | Inclusive |
+| `endDate` | string (ISO 8601, no TZ) | no | Inclusive; must be after `startDate` |
+| `startingBalance` | number | yes | Defaults to `trading.strategy-balances[pair][strategy]` then `trading.paper-balance` |
+| `paramOverrides` | object | yes | Recognized keys: `emaShortPeriod`, `emaLongPeriod`, `rsiPeriod`, `rsiOverbought`, `rsiOversold`, `takeProfitPct`, `stopLossPct`, `maxPositionPct`, `feeRate`, `slippageRate`. Unknown keys are ignored. |
+| `label` | string | yes | Free-form; auto-generated from triple + dates if omitted. |
+| `notes` | string | yes | Free-form |
+
+### `BacktestRunSummary`
+
+Returned by `GET /api/backtest/runs` and `PATCH /api/backtest/runs/{id}`. Excludes the heavy `trades` and `equityCurve` payloads.
+
+| Field | JSON type | Nullable | Notes |
+|-------|-----------|----------|-------|
+| `id` | string (UUID) | no | |
+| `pair` | string | no | |
+| `strategy` | string | no | `StrategyType` |
+| `interval` | string | no | |
+| `startDate` | string (ISO 8601) | no | |
+| `endDate` | string (ISO 8601) | no | |
+| `startingBalance` | number | no | |
+| `stats` | [`BacktestStats`](#backteststats) | no | |
+| `label` | string | yes | |
+| `createdAt` | string (ISO 8601) | no | |
+
+### `BacktestRunDetail`
+
+Returned by `POST /api/backtest/run` and `GET /api/backtest/runs/{id}`. Superset of `BacktestRunSummary`.
+
+| Field | JSON type | Nullable | Notes |
+|-------|-----------|----------|-------|
+| (all `BacktestRunSummary` fields) | | | |
+| `params` | object | no | Override map applied to this run. May be empty. |
+| `trades` | [`SimulatedTrade[]`](#simulatedtrade) | no | Closed trades in execution order. |
+| `equityCurve` | [`EquityPoint[]`](#equitypoint) | no | One point per bar in the window after warmup. |
+| `notes` | string | yes | |
+
+### `BacktestStats`
+
+Aggregated metrics for a run. Combines the fields of [`TradingStats`](#tradingstats) with backtest-only risk/quality metrics. All numeric fields are JSON numbers (BigDecimal serialized).
+
+| Field | JSON type | Notes |
+|-------|-----------|-------|
+| `totalTrades`, `winningTrades`, `losingTrades` | int | |
+| `winRate` | number | 0–100 |
+| `totalPnl`, `averageWin`, `averageLoss`, `bestTrade`, `worstTrade`, `expectancy` | number | Gross |
+| `netPnl`, `totalFees`, `totalSlippage`, `feeDragPct`, `netExpectancy` | number | Net (after fees + slippage) |
+| `sharpeRatio` | number | `mean(barReturn) / stddev(barReturn) × sqrt(252)`. > 1 = decent, > 2 = great. |
+| `maxDrawdown` | number | EUR; largest peak-to-trough on the equity curve. |
+| `maxDrawdownPct` | number | Same as fraction of the peak. |
+| `maxDrawdownDurationBars` | int | Bars from the peak to the trough. |
+| `profitFactor` | number | `Σ wins / Σ |losses|`. > 1 = profitable; > 1.5 = healthy. Returns `999` when there are wins but no losses. |
+| `maxConsecutiveLosses` | int | Longest losing streak. |
+| `tradesPerMonth` | number | `nTrades / months in window`. |
+| `tStatistic` | number | t-stat of mean trade net P&L. `t > 2` ≈ 95% confidence the edge is real (with caveats). |
+| `pnlStdDev` | number | Per-trade net P&L stddev. |
+
+### `SimulatedTrade`
+
+A single closed trade produced by a backtest replay. Lives inside `BacktestRunDetail.trades`. Never persisted to `trading.trades`.
+
+| Field | JSON type | Notes |
+|-------|-----------|-------|
+| `sequence` | int | 1-based order in the run. |
+| `side` | string | `"BUY"` (only longs in v1). |
+| `entryPrice`, `exitPrice`, `quantity` | number | |
+| `executedAt`, `closedAt` | string (ISO 8601) | |
+| `pnl`, `pnlPct` | number | Gross. |
+| `entryFee`, `exitFee`, `entrySlippage`, `exitSlippage` | number | |
+| `netPnl`, `netPnlPct` | number | After all costs. |
+| `exitReason` | string | `TP_HIT` / `SL_HIT` / `SIGNAL_EXIT` / `BACKTEST_END` |
+| `entrySignalReason` | string | The strategy's reason text at entry. |
+
+### `EquityPoint`
+
+One sample on the equity curve.
+
+| Field | JSON type | Notes |
+|-------|-----------|-------|
+| `timestamp` | string (ISO 8601) | Bar end time, UTC. |
+| `equity` | number | `balance + unrealizedPnl` at this bar's close. |
+| `drawdown` | number | EUR; `peakEquity − equity`. |
+| `drawdownPct` | number | Fraction of peak. |
+
+### `WalkForwardResult`
+
+Returned by `POST /api/backtest/walk-forward`.
+
+| Field | JSON type | Notes |
+|-------|-----------|-------|
+| `windows` | [`BacktestRunSummary[]`](#backtestrunsummary) | One element per sub-window, in chronological order. Each element is also persisted as its own row in `trading.backtest_runs`. |
+| `varianceMetrics.winRateStdDev` | number | Stddev of `winRate` across windows. |
+| `varianceMetrics.expectancyStdDev` | number | Stddev of gross `expectancy`. |
+| `varianceMetrics.netPnlStdDev` | number | Stddev of `netPnl`. |
+| `varianceMetrics.consistencyVerdict` | string | `STABLE` (CV < 0.30) / `REGIME_DEPENDENT` (0.30–0.70) / `WILDLY_VARYING` (≥ 0.70 or mean ≤ 0). Heuristic — eyeball the per-window stats too. |
 
 ---
 
