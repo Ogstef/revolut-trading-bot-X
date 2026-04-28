@@ -830,11 +830,12 @@ Returned by `POST /api/backtest/walk-forward`.
 
 | Field | JSON type | Notes |
 |-------|-----------|-------|
-| `windows` | [`BacktestRunSummary[]`](#backtestrunsummary) | One element per sub-window, in chronological order. Each element is also persisted as its own row in `trading.backtest_runs`. |
-| `varianceMetrics.winRateStdDev` | number | Stddev of `winRate` across windows. |
+| `windows` | [`BacktestRunSummary[]`](#backtestrunsummary) | One element per sub-window that ran successfully, in chronological order. Each element is also persisted as its own row in `trading.backtest_runs`. May be shorter than the requested window count if some sub-windows were skipped (see `skippedWindows`). |
+| `skippedWindows` | `SkippedWindow[]` | Sub-windows the simulator could not run — typically because no candles exist in that range (15m history caps at ~47 days). Each entry: `{ "index": int (1-based), "startDate": ISO 8601, "endDate": ISO 8601, "reason": string }`. |
+| `varianceMetrics.winRateStdDev` | number | Stddev of `winRate` across successful windows. |
 | `varianceMetrics.expectancyStdDev` | number | Stddev of gross `expectancy`. |
 | `varianceMetrics.netPnlStdDev` | number | Stddev of `netPnl`. |
-| `varianceMetrics.consistencyVerdict` | string | `STABLE` (CV < 0.30) / `REGIME_DEPENDENT` (0.30–0.70) / `WILDLY_VARYING` (≥ 0.70 or mean ≤ 0). Heuristic — eyeball the per-window stats too. |
+| `varianceMetrics.consistencyVerdict` | string | `STABLE` (CV < 0.30) / `REGIME_DEPENDENT` (0.30–0.70) / `WILDLY_VARYING_HIGH_VARIANCE` (CV ≥ 0.70, positive mean) / `WILDLY_VARYING_NEGATIVE` (mean ≤ 0). Heuristic — eyeball the per-window stats too. |
 
 ---
 

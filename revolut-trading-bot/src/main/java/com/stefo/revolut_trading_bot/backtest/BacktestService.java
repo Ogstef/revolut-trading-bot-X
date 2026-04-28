@@ -125,6 +125,7 @@ public class BacktestService {
         long perWindowSeconds = total.toSeconds() / windows;
 
         List<BacktestRunSummary> summaries = new ArrayList<>();
+        List<WalkForwardResult.SkippedWindow> skipped = new ArrayList<>();
         for (int i = 0; i < windows; i++) {
             LocalDateTime ws = req.startDate().plusSeconds(perWindowSeconds * i);
             LocalDateTime we = (i == windows - 1)
@@ -140,10 +141,11 @@ public class BacktestService {
                 summaries.add(toSummary(detail));
             } catch (IllegalArgumentException e) {
                 log.warn("Walk-forward window {}/{} skipped: {}", i + 1, windows, e.getMessage());
+                skipped.add(new WalkForwardResult.SkippedWindow(i + 1, ws, we, e.getMessage()));
             }
         }
 
-        return new WalkForwardResult(summaries, computeVarianceMetrics(summaries));
+        return new WalkForwardResult(summaries, skipped, computeVarianceMetrics(summaries));
     }
 
     // ─── Single-pair walk forward ─────────────────────────────────────────────
@@ -406,7 +408,7 @@ public class BacktestService {
     private WalkForwardResult.VarianceMetrics computeVarianceMetrics(List<BacktestRunSummary> wins) {
         if (wins.size() < 2) {
             return new WalkForwardResult.VarianceMetrics(
-                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "WILDLY_VARYING");
+                    BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "WILDLY_VARYING_NEGATIVE");
         }
         BigDecimal winRateMean = avg(wins, w -> w.stats().winRate());
         BigDecimal winRateSd   = sd(wins, w -> w.stats().winRate(), winRateMean);
@@ -418,12 +420,12 @@ public class BacktestService {
         BigDecimal pnlMean = avg(wins, w -> w.stats().netPnl());
         String verdict;
         if (pnlMean.signum() <= 0) {
-            verdict = "WILDLY_VARYING";       // negative across windows = no edge
+            verdict = "WILDLY_VARYING_NEGATIVE";   // mean ≤ 0 — no edge across windows
         } else {
             BigDecimal cv = pnlSd.divide(pnlMean.abs(), 4, RoundingMode.HALF_UP);
             verdict = cv.compareTo(BigDecimal.valueOf(0.30)) < 0 ? "STABLE"
                     : cv.compareTo(BigDecimal.valueOf(0.70)) < 0 ? "REGIME_DEPENDENT"
-                    : "WILDLY_VARYING";
+                    : "WILDLY_VARYING_HIGH_VARIANCE";   // positive mean but high stddev
         }
         return new WalkForwardResult.VarianceMetrics(
                 winRateSd.setScale(2, RoundingMode.HALF_UP),
