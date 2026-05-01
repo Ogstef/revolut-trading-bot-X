@@ -227,6 +227,16 @@ Per-triple soft-disable. `disable` blocks NEW entries on the next cycle; existin
 
 ---
 
+### 4.4¾ Today summary
+
+#### `GET /api/today`
+- Query: none
+- Response: [`TodaySummary`](#todaysummary) — single object aggregating every closed trade since `LocalDate.now().atStartOfDay()` across all `(pair, interval, strategy)` triples.
+- Backed by `TradeRepository.findClosedTradesSince(startOfDay)` + an in-memory group-by-triple in `TodaySummaryService`. `openPositions` lists positions opened today that are still `OPEN`, enriched with live `currentPrice` / `unrealisedPnl` via `MarketDataService`.
+- UI polling: 30s (Today tab).
+
+---
+
 ### 4.5 Activity
 
 #### `GET /api/activity`
@@ -595,6 +605,53 @@ Returned by `GET /api/triples/disabled` and `POST /api/triples/.../disable`.
 | `disabledAt` | string (ISO 8601) | no | UTC timestamp when the row was inserted. |
 | `reason` | string | yes | Free-form text supplied at disable time. |
 
+### `TodaySummary`
+
+Returned by `GET /api/today`. Single payload for the "Today" UI tab.
+
+| Field | JSON type | Nullable | Notes |
+|-------|-----------|----------|-------|
+| `date` | string (ISO `LocalDate`) | no | Server-local current date — basis for "today" |
+| `startOfDay` | string (ISO `LocalDateTime`) | no | `date.atStartOfDay()` — lower bound for `closedAt` |
+| `generatedAt` | string (ISO `LocalDateTime`) | no | Snapshot timestamp |
+| `totalTrades` | number (int) | no | Closed trades since `startOfDay` (across all triples) |
+| `winningTrades` | number (int) | no | `pnl > 0` count |
+| `losingTrades` | number (int) | no | `pnl <= 0` count (matches `TradingStats` convention) |
+| `winRate` | number | no | 0–100, two decimals |
+| `grossPnl` | number | no | Sum of `pnl` |
+| `netPnl` | number | no | Sum of `netPnl` (falls back to `pnl` for legacy rows with null `netPnl`) |
+| `totalFees` | number | no | Sum of all entry+exit fees today |
+| `totalSlippage` | number | no | Sum of all entry+exit slippage today |
+| `feeDragPct` | number | no | `totalCosts / |grossPnl| × 100`, 0 when no gross PnL |
+| `bestTrade` | number | no | Max `pnl` |
+| `worstTrade` | number | no | Min `pnl` |
+| `averageWin` | number | no | Mean `pnl` of winners (0 if none) |
+| `averageLoss` | number | no | Mean `pnl` of losers (0 if none, negative when present) |
+| `expectancy` | number | no | `(winRateFrac × avgWin) + ((1 − winRateFrac) × avgLoss)` |
+| `positionsOpenedToday` | number (int) | no | Count of currently-OPEN positions whose `openedAt >= startOfDay` |
+| `positionsClosedToday` | number (int) | no | Same as `totalTrades` (alias for clarity) |
+| `openPositionsNow` | number (int) | no | Total currently-OPEN positions across the whole bot |
+| `byTriple` | [`TodayTripleRow[]`](#todaytriplerow) | no | One row per `(pair, interval, strategy)` that traded today, sorted by `netPnl DESC` |
+| `trades` | [`Trade[]`](#trade) | no | Closed trades today, newest-first by `closedAt` |
+| `openPositions` | [`PositionView[]`](#positionview) | no | Positions opened today still `OPEN`, enriched with live price |
+
+### `TodayTripleRow`
+
+Per-triple roll-up of today's closed trades, embedded in [`TodaySummary.byTriple`](#todaysummary).
+
+| Field | JSON type | Notes |
+|-------|-----------|-------|
+| `pair` | string | e.g. `"BTC-EUR"` |
+| `interval` | string | e.g. `"15m"` |
+| `strategy` | string | `StrategyType` enum name |
+| `displayName` | string | Human-readable strategy label (see §2) |
+| `totalTrades` | number (int) | Trades closed today by this triple |
+| `winningTrades` | number (int) | `pnl > 0` |
+| `losingTrades` | number (int) | `pnl <= 0` |
+| `grossPnl` | number | Sum of `pnl` for this triple |
+| `netPnl` | number | Sum of effective `netPnl` |
+| `totalCosts` | number | Sum of all fees + slippage |
+
 ### `BotEvent`
 
 Returned by `GET /api/activity`. Persisted into `trading.bot_events` at the point each event occurs.
@@ -886,6 +943,7 @@ Used by backend to estimate read load.
 | `GET /api/stats/all-triples` | 30s | `useAllTripleStats` — Leaderboard + Cross-Interval |
 | `GET /api/strategies/{n}/trades` (fanned × 5 intervals) | 30s | `useAllIntervalTrades` (Cross-Interval tab) |
 | `GET /api/activity` | 15s | `useActivityFeed` (Activity tab) |
+| `GET /api/today` | 30s | `useToday` (Today tab) |
 | `GET /api/market/fear-greed` | 5 min | `useFearGreed` |
 | `GET /api/market/sentiment` | 2 min | `useSentiment` |
 | `POST /api/sentiment/ingest/{reddit,cryptopanic}` | scraper-driven (5 / 15 min) | external `sentiment-scraper` microservice |

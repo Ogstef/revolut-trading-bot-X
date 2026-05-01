@@ -58,6 +58,7 @@ public class DashboardController {
     private final CandlestickRepository candlestickRepository;
     private final SentimentService sentimentService;
     private final TripleConfigService tripleConfigService;
+    private final TodaySummaryService todaySummaryService;
 
     // ─── Status ───────────────────────────────────────────────────────────────
 
@@ -290,6 +291,13 @@ public class DashboardController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown interval: " + interval
                     + " (configured: " + tradingConfig.intervalLabels() + ")");
         }
+    }
+
+    // ─── Today summary ────────────────────────────────────────────────────────
+
+    @GetMapping("/today")
+    public ResponseEntity<TodaySummary> today() {
+        return ResponseEntity.ok(todaySummaryService.build());
     }
 
     // ─── Activity feed ────────────────────────────────────────────────────────

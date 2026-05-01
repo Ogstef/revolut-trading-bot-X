@@ -239,6 +239,7 @@ All at `http://localhost:8089/api`. See `API_CONTRACT.md` for full field-level d
 | GET | `/api/signals/summary?pair=&interval=` | Signal counts per strategy |
 | GET | `/api/signals/current?pair=&interval=` | Latest signal per (pair, interval, strategy) triple |
 | GET | `/api/stats/all-triples` | One TripleStats row per configured triple (195 rows) |
+| GET | `/api/today` | Today-only summary — KPIs, per-triple breakdown, closed trades, positions opened today |
 | GET | `/api/activity?limit=&types=` | Bot event audit trail |
 | GET | `/api/candles?pair=&interval=&limit=` | Cached candlestick data |
 | GET | `/api/market/fear-greed` | Fear & Greed Index (1h in-memory cache, not persisted) |

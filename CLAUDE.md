@@ -76,6 +76,7 @@ Key endpoints:
 | `GET /api/strategies/{name}/stats?pair=&interval=` | Win rate, PnL, expectancy, fee drag |
 | `GET /api/strategies/{name}/pnl?pair=&interval=` | Gross + net PnL breakdown (daily/weekly/monthly/all-time) |
 | `GET /api/strategies/{name}/history?pair=&interval=&from=&to=` | Closed trades enriched with signal reason, TP/SL, R-multiple |
+| `GET /api/today` | Today-only summary — KPIs, per-triple breakdown, closed trades, positions opened today |
 | `GET /api/stats/all-triples` | One stats row per configured triple (195 rows) |
 | `GET /api/positions/live` | All open positions across all triples |
 | `GET /api/signals/current?pair=&interval=` | Latest signal per triple |
