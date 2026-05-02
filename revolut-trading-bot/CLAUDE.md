@@ -38,10 +38,10 @@ The fundamental unit is the **triple `(pair, strategy, interval)`** — each com
 
 **Current configuration:**
 - **Pairs:** BTC-EUR, ETH-EUR, SOL-EUR
-- **Strategies:** 16 (13 TA + 3 sentiment; see list below)
+- **Strategies:** 17 (13 TA + 3 sentiment + 1 macro context; see list below)
 - **Intervals:** 15m, 1h, 4h, 1d, 1w
 
-This gives **240 independent virtual portfolios** all running on the same 30-second heartbeat.
+This gives **255 independent virtual portfolios** (when `sentiment.enabled: true`; 210 when off) all running on the same 30-second heartbeat.
 
 **Balance sharing:** balances are keyed by `(pair, strategy)` and shared across intervals. Positions, trades, risk checks, and P&L are isolated per interval.
 
@@ -96,6 +96,7 @@ All implement `TradingStrategy`, are `@Component` beans, and are autowired into 
 | `REDDIT_SENTIMENT` | Reddit Sentiment | Windowed Claude Haiku score ±0.35 (opt-in, needs scraper + API key) |
 | `CRYPTOPANIC_SENTIMENT` | CryptoPanic Sentiment | Vote-derived score ±0.35 (opt-in, no LLM) |
 | `COMBINED_SENTIMENT` | Combined Sentiment | Sample-weighted blend, require-agreement filter, ±0.40 |
+| `MARKET_CONTEXT` | Market Context | Contrarian on Fear & Greed (≤25 → BUY, ≥75 → SELL) confirmed by top-5 bid/ask volume ratio |
 
 ### Sentiment pipeline
 
@@ -187,7 +188,7 @@ Every 30 seconds (`TradingLoop`):
    - Execute signal (BUY/SELL/HOLD) via `OrderExecutionService`
 5. Log via `AlertService` (Telegram + SLF4J)
 
-Total signals per cycle: 16 strategies × 3 pairs × 5 intervals = **240 signals** (when sentiment is enabled; 195 with TA-only).
+Total signals per cycle: 17 strategies × 3 pairs × 5 intervals = **255 signals** (when sentiment is enabled; 210 with TA + MARKET_CONTEXT only).
 
 ---
 
@@ -238,11 +239,12 @@ All at `http://localhost:8089/api`. See `API_CONTRACT.md` for full field-level d
 | GET | `/api/strategies/{name}/signals?pair=&interval=&limit=` | Signal history |
 | GET | `/api/signals/summary?pair=&interval=` | Signal counts per strategy |
 | GET | `/api/signals/current?pair=&interval=` | Latest signal per (pair, interval, strategy) triple |
-| GET | `/api/stats/all-triples` | One TripleStats row per configured triple (195 rows) |
+| GET | `/api/stats/all-triples` | One TripleStats row per configured triple (210 rows TA + MARKET_CONTEXT, 255 with sentiment enabled) |
 | GET | `/api/today` | Today-only summary — KPIs, per-triple breakdown, closed trades, positions opened today |
 | GET | `/api/activity?limit=&types=` | Bot event audit trail |
 | GET | `/api/candles?pair=&interval=&limit=` | Cached candlestick data |
 | GET | `/api/market/fear-greed` | Fear & Greed Index (1h in-memory cache, not persisted) |
+| GET | `/api/market/context?pair=` | Per-pair F&G + top-of-book bid/ask volume ratio (inputs to `MARKET_CONTEXT` strategy; 30s cache) |
 | GET | `/api/market/sentiment?pair=&source=&interval=` | Windowed Reddit/CryptoPanic/combined aggregate |
 | POST | `/api/sentiment/ingest/reddit` | Scraper push — Bearer-authed, `RedditIngestRequest` body |
 | POST | `/api/sentiment/ingest/cryptopanic` | Scraper push — Bearer-authed, `CryptoPanicIngestRequest` body |

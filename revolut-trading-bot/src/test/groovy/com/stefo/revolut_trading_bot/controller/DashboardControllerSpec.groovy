@@ -2,6 +2,7 @@ package com.stefo.revolut_trading_bot.controller
 
 import com.stefo.revolut_trading_bot.alert.AlertService
 import com.stefo.revolut_trading_bot.config.TradingConfig
+import com.stefo.revolut_trading_bot.market.MarketContextService
 import com.stefo.revolut_trading_bot.model.dto.BotStatusResponse
 import com.stefo.revolut_trading_bot.model.dto.PnlBreakdown
 import com.stefo.revolut_trading_bot.model.dto.ConfigUpdateRequest
@@ -21,6 +22,7 @@ import com.stefo.revolut_trading_bot.service.SentimentService
 import com.stefo.revolut_trading_bot.service.SignalService
 import com.stefo.revolut_trading_bot.service.StatsAggregationService
 import com.stefo.revolut_trading_bot.service.StrategyService
+import com.stefo.revolut_trading_bot.service.TodaySummaryService
 import com.stefo.revolut_trading_bot.service.TripleConfigService
 import org.springframework.http.HttpStatus
 import spock.lang.Specification
@@ -49,19 +51,22 @@ class DashboardControllerSpec extends Specification {
     StrategyService          strategyService          = Mock()
     SignalService            signalService            = Mock()
     FearGreedService         fearGreedService         = Mock()
+    MarketContextService     marketContextService     = Mock()
     StatsAggregationService  statsAggregationService  = Mock()
     BotEventService          botEventService          = Mock()
     CandlestickRepository    candlestickRepository    = Mock()
     SentimentService         sentimentService         = Mock()
     TripleConfigService      tripleConfigService      = Mock()
+    TodaySummaryService      todaySummaryService      = Mock()
 
     @Subject
     DashboardController controller = new DashboardController(
             botStateService, tradingConfig, tradeService, tradeRepository,
             alertService, botStatusService, positionService, configService,
             strategyService, signalService, fearGreedService,
+            marketContextService,
             statsAggregationService, botEventService, candlestickRepository,
-            sentimentService, tripleConfigService)
+            sentimentService, tripleConfigService, todaySummaryService)
 
     def setup() {
         tradingConfig.primaryPair()     >> "BTC-EUR"

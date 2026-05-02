@@ -2,9 +2,9 @@
 
 ## Overview
 
-Automated cryptocurrency trading bot. Runs 16 strategies (13 technical-analysis + 3 sentiment) across 3 pairs and 5 candle intervals simultaneously. Each `(pair, strategy, interval)` triple is a fully isolated virtual portfolio with independent positions, trades, risk management, and P&L tracking.
+Automated cryptocurrency trading bot. Runs 17 strategies (13 technical-analysis + 3 sentiment + 1 macro market-context) across 3 pairs and 5 candle intervals simultaneously. Each `(pair, strategy, interval)` triple is a fully isolated virtual portfolio with independent positions, trades, risk management, and P&L tracking.
 
-**16 strategies × 3 pairs × 5 intervals = 240 independent SPOT portfolios**, all on a 30-second heartbeat.
+**17 strategies × 3 pairs × 5 intervals = 255 independent SPOT portfolios** (when `sentiment.enabled: true`; 210 with sentiment off), all on a 30-second heartbeat.
 
 Monorepo with three modules:
 - **`revolut-trading-bot/`** — Java 21 / Spring Boot backend (REST API, trading engine, PostgreSQL, sentiment classifier + ingest)
@@ -43,7 +43,7 @@ npm install && npm run dev
 The fundamental unit is the **triple `(pair, strategy, interval)`**:
 
 - **Pair:** BTC-EUR, ETH-EUR, SOL-EUR
-- **Strategy:** 16 strategies — 13 TA (EMA_CROSSOVER, MACD, BOLLINGER, RSI_MOMENTUM, STOCH_RSI, TRIPLE_EMA, PARABOLIC_SAR, ADX_DI, CCI, MFI, DONCHIAN, ICHIMOKU, SUPERTREND) + 3 sentiment (REDDIT_SENTIMENT, CRYPTOPANIC_SENTIMENT, COMBINED_SENTIMENT; enabled via `sentiment.enabled`)
+- **Strategy:** 17 strategies — 13 TA (EMA_CROSSOVER, MACD, BOLLINGER, RSI_MOMENTUM, STOCH_RSI, TRIPLE_EMA, PARABOLIC_SAR, ADX_DI, CCI, MFI, DONCHIAN, ICHIMOKU, SUPERTREND) + 3 sentiment (REDDIT_SENTIMENT, CRYPTOPANIC_SENTIMENT, COMBINED_SENTIMENT; enabled via `sentiment.enabled`) + 1 macro context (MARKET_CONTEXT — Fear & Greed + order-book imbalance)
 - **Interval:** 15m, 1h, 4h, 1d, 1w (configured in `application.yml` as `[15, 60, 240, 1440, 10080]`)
 
 **Balance sharing:** balances are keyed by `(pair, strategy)` and shared across intervals. Positions, trades, risk, and P&L are isolated per interval.
@@ -77,12 +77,13 @@ Key endpoints:
 | `GET /api/strategies/{name}/pnl?pair=&interval=` | Gross + net PnL breakdown (daily/weekly/monthly/all-time) |
 | `GET /api/strategies/{name}/history?pair=&interval=&from=&to=` | Closed trades enriched with signal reason, TP/SL, R-multiple |
 | `GET /api/today` | Today-only summary — KPIs, per-triple breakdown, closed trades, positions opened today |
-| `GET /api/stats/all-triples` | One stats row per configured triple (195 rows) |
+| `GET /api/stats/all-triples` | One stats row per configured triple (210 rows TA-only, 255 with sentiment enabled) |
 | `GET /api/positions/live` | All open positions across all triples |
 | `GET /api/signals/current?pair=&interval=` | Latest signal per triple |
 | `GET /api/activity?limit=&types=` | Bot event audit trail |
 | `GET /api/candles?pair=&interval=&limit=` | Cached candlestick data |
 | `GET /api/market/fear-greed` | Crypto Fear & Greed Index (1h in-memory cache) |
+| `GET /api/market/context?pair=` | Per-pair Fear & Greed + bid/ask volume ratio (inputs to MARKET_CONTEXT strategy; 30s cache) |
 | `GET /api/market/sentiment?pair=&source=&interval=` | Windowed Reddit/CryptoPanic/combined sentiment aggregate |
 | `POST /api/sentiment/ingest/{reddit,cryptopanic}` | Scraper push — Bearer-authed, batched |
 

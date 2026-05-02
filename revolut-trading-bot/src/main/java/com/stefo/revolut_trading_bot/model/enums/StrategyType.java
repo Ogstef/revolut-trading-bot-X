@@ -32,7 +32,9 @@ public enum StrategyType {
     // Phase 14 — sentiment (news + social)
     REDDIT_SENTIMENT("Reddit Sentiment"),
     CRYPTOPANIC_SENTIMENT("CryptoPanic Sentiment"),
-    COMBINED_SENTIMENT("Combined Sentiment");
+    COMBINED_SENTIMENT("Combined Sentiment"),
+    // Phase 15 — macro market context (Fear & Greed + order-book imbalance)
+    MARKET_CONTEXT("Market Context");
 
     /** Human-readable label used in logs and API responses. */
     private final String displayName;
