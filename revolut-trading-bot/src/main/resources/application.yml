@@ -43,6 +43,7 @@ trading:
   intervals: [15, 60, 240, 1440, 10080] # candle intervals in minutes (15m, 1h, 4h, 1d, 1w); first entry is the primary interval
   mode: PAPER
   polling-interval-seconds: 30
+  signal-log-retention-days: 14        # nightly cleanup deletes signal_logs rows older than this
   paper-balance: 10000.00              # fallback balance used when a pair/strategy is not listed below
   primary-strategy: EMA_CROSSOVER      # which strategy drives the legacy /api/status metrics
   strategy-balances:                   # nested: pair → strategy → starting EUR balance
