@@ -37,6 +37,10 @@ public class TradingConfig {
     @Positive
     private int pollingIntervalSeconds;
 
+    // Number of days of signal_logs history to retain. Older rows are deleted nightly by SignalLogCleanupScheduler.
+    @Positive
+    private int signalLogRetentionDays = 14;
+
     // Fallback balance used when a (pair, strategy) combination is not listed in strategyBalances.
     @Positive
     private BigDecimal paperBalance;

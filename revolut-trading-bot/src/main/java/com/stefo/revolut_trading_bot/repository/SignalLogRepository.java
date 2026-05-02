@@ -4,9 +4,11 @@ import com.stefo.revolut_trading_bot.model.entity.SignalLog;
 import com.stefo.revolut_trading_bot.model.enums.SignalType;
 import com.stefo.revolut_trading_bot.model.enums.StrategyType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -75,4 +77,10 @@ public interface SignalLogRepository extends JpaRepository<SignalLog, Long> {
             ORDER BY pair, interval, strategy_name, created_at DESC
             """, nativeQuery = true)
     List<SignalLog> findLatestPerTriple(@Param("pair") String pair, @Param("interval") String interval);
+
+    /** Bulk-deletes signal logs older than the given cutoff. Returns the number of rows removed. */
+    @Modifying
+    @Transactional
+    @Query("DELETE FROM SignalLog s WHERE s.createdAt < :cutoff")
+    int deleteOlderThan(@Param("cutoff") LocalDateTime cutoff);
 }
