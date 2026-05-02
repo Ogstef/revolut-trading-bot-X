@@ -60,6 +60,7 @@ trading:
       MFI: 10000.00
       DONCHIAN: 10000.00
       ICHIMOKU: 10000.00
+      MARKET_CONTEXT: 10000.00
     ETH-EUR:
       EMA_CROSSOVER: 5000.00
       MACD: 5000.00
@@ -73,6 +74,7 @@ trading:
       MFI: 5000.00
       DONCHIAN: 5000.00
       ICHIMOKU: 5000.00
+      MARKET_CONTEXT: 5000.00
     SOL-EUR:
       EMA_CROSSOVER: 5000.00
       MACD: 5000.00
@@ -86,6 +88,7 @@ trading:
       MFI: 5000.00
       DONCHIAN: 5000.00
       ICHIMOKU: 5000.00
+      MARKET_CONTEXT: 5000.00
   costs:
     fee-rate: 0.0009   # per-side taker fee — Revolut X exchange rate (same for all plans, incl. Ultra Metal)
     slippage-rate: 0.0005  # per-side slippage estimate — 5 bps, reasonable for BTC/ETH market orders at this size
@@ -144,6 +147,14 @@ sentiment:
       buy-threshold:   0.25             # slightly higher bar for multi-source agreement
       sell-threshold: -0.25
       require-agreement: true           # HOLD if Reddit and CryptoPanic signs diverge
+
+market-context:
+  # Standalone MARKET_CONTEXT strategy: contrarian on macro Fear & Greed, confirmed by
+  # order-book pressure in the same direction. Both conditions must hold to trade.
+  buy-fear-greed-max:    25             # F&G ≤ this → "Extreme Fear" zone
+  buy-bid-ask-ratio-min: 1.20           # bids ≥ 1.2× asks at top-5 levels
+  sell-fear-greed-min:   75             # F&G ≥ this → "Extreme Greed" zone
+  sell-bid-ask-ratio-max: 0.83          # bids ≤ 0.83× asks (≈ ratio < 1/1.2)
 
 revolut:
   api:

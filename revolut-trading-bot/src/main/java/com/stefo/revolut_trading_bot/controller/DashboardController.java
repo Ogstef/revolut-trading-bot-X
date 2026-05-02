@@ -2,6 +2,8 @@ package com.stefo.revolut_trading_bot.controller;
 
 import com.stefo.revolut_trading_bot.alert.AlertService;
 import com.stefo.revolut_trading_bot.config.TradingConfig;
+import com.stefo.revolut_trading_bot.market.MarketContext;
+import com.stefo.revolut_trading_bot.market.MarketContextService;
 import com.stefo.revolut_trading_bot.model.dto.*;
 import com.stefo.revolut_trading_bot.service.FearGreedService;
 import com.stefo.revolut_trading_bot.model.entity.BotEvent;
@@ -53,6 +55,7 @@ public class DashboardController {
     private final StrategyService strategyService;
     private final SignalService signalService;
     private final FearGreedService fearGreedService;
+    private final MarketContextService marketContextService;
     private final StatsAggregationService statsAggregationService;
     private final BotEventService botEventService;
     private final CandlestickRepository candlestickRepository;
@@ -336,6 +339,13 @@ public class DashboardController {
         FearGreedResponse result = fearGreedService.get();
         if (result == null) return ResponseEntity.noContent().build();
         return ResponseEntity.ok(result);
+    }
+
+    @GetMapping("/market/context")
+    public ResponseEntity<MarketContext> marketContext(
+            @RequestParam(required = false) String pair) {
+        String resolved = (pair != null && !pair.isBlank()) ? pair : tradingConfig.primaryPair();
+        return ResponseEntity.ok(marketContextService.getContext(resolved));
     }
 
     @GetMapping("/market/sentiment")

@@ -29,7 +29,7 @@
 
 All enums are serialized as their **string name** (Jackson + JPA `@Enumerated(EnumType.STRING)`).
 
-### `StrategyType` (16 values)
+### `StrategyType` (17 values)
 
 | Enum name | Display name |
 |-----------|--------------|
@@ -49,6 +49,7 @@ All enums are serialized as their **string name** (Jackson + JPA `@Enumerated(En
 | `REDDIT_SENTIMENT` | Reddit Sentiment |
 | `CRYPTOPANIC_SENTIMENT` | CryptoPanic Sentiment |
 | `COMBINED_SENTIMENT` | Combined Sentiment |
+| `MARKET_CONTEXT` | Market Context |
 
 ### `SentimentSource` (3 values)
 
@@ -261,6 +262,12 @@ Response: [`SentimentResponse`](#sentimentresponse) — windowed aggregate with 
 - Response: [`FearGreedResponse`](#fearreedresponse) — or **`204 No Content`** if the upstream provider is unavailable
 - Backend caches the value for 1 hour
 - UI polling: 5 min
+
+#### `GET /api/market/context`
+Query params:
+- `pair` (default `trading.pairs[0]`)
+
+Response: [`MarketContextResponse`](#marketcontextresponse) — Fear & Greed value + top-of-book bid/ask volume ratio for the given pair. Both fields nullable so a flaky upstream never propagates as a fake signal. Backend caches per-pair for 30 s. Inputs feed the `MARKET_CONTEXT` strategy.
 
 ---
 
@@ -494,6 +501,18 @@ Returned from `GET /api/market/fear-greed`. **The endpoint returns `204 No Conte
 | `value` | number (int) | no | 0 (Extreme Fear) – 100 (Extreme Greed) |
 | `classification` | string | no | `"Extreme Fear"` / `"Fear"` / `"Neutral"` / `"Greed"` / `"Extreme Greed"` |
 | `timestamp` | number (long) | no | Unix epoch **seconds** |
+
+### `MarketContextResponse`
+
+Returned from `GET /api/market/context?pair=`. Snapshot of the inputs the `MARKET_CONTEXT` strategy reads on every cycle. Either `fearGreedValue`/`fearGreedClassification` or `bidAskRatio` may be null when its upstream fetch fails — the strategy treats null as "no signal" and returns HOLD rather than substituting a default.
+
+| Field | JSON type | Nullable | Notes |
+|-------|-----------|----------|-------|
+| `pair` | string | no | e.g. `"BTC-EUR"` |
+| `fearGreedValue` | number (int) | yes | 0 (Extreme Fear) – 100 (Extreme Greed) |
+| `fearGreedClassification` | string | yes | `"Extreme Fear"` / `"Fear"` / `"Neutral"` / `"Greed"` / `"Extreme Greed"` |
+| `bidAskRatio` | number | yes | `Σ bid.q / Σ ask.q` over top-5 levels. >1 = bid pressure, <1 = ask pressure |
+| `snapshotAt` | string (ISO-8601 instant) | no | When the snapshot was assembled |
 
 ### `ConfigUpdateRequest`
 
@@ -946,6 +965,7 @@ Used by backend to estimate read load.
 | `GET /api/today` | 30s | `useToday` (Today tab) |
 | `GET /api/market/fear-greed` | 5 min | `useFearGreed` |
 | `GET /api/market/sentiment` | 2 min | `useSentiment` |
+| `GET /api/market/context` | 1 min | `useMarketContext` |
 | `POST /api/sentiment/ingest/{reddit,cryptopanic}` | scraper-driven (5 / 15 min) | external `sentiment-scraper` microservice |
 | `GET /api/candles` | 30s | `useCandles` (Charts tab) |
 | `GET /api/pairs`, `GET /api/intervals` | once (static) | `usePairs`, `useIntervals` |
