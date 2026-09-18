@@ -148,8 +148,8 @@ cd revolut-trading-bot
 mvn spring-boot:run -Dspring-boot.run.profiles=local
 # → http://localhost:8089
 
-# 3. Start the frontend
-cd revolut-trading-bot-ui
+# 3. Start the frontend (separate repo — github.com/Ogstef/revolut-bot-ui)
+git clone git@github.com:Ogstef/revolut-bot-ui.git && cd revolut-bot-ui
 npm install && npm run dev
 # → http://localhost:5173
 ```
@@ -160,14 +160,23 @@ The engine runs in **PAPER mode** — a Revolut X API key (Ed25519-signed) is st
 
 ## Project structure
 
+This repository holds the backend and project docs. The dashboard and the sentiment scraper are separate repos, listed below.
+
 ```
 revolut-trading-bot-X/
 ├── revolut-trading-bot/       # Java 21 / Spring Boot backend — trading engine, REST API, risk management
-├── revolut-trading-bot-ui/    # React 19 / TypeScript dashboard
-├── scrapers/sentiment-scraper/# Python 3.12 microservice — Reddit + CryptoPanic ingestion
+├── docs/
+│   └── future-plans/          # Specs for unbuilt features (backtest engine v2, risk analytics, etc.)
 ├── API_CONTRACT.md            # Canonical HTTP contract for all /api/** endpoints
-└── BACKTESTING.md             # Backtest engine architecture + strategy tuning log
+├── BACKTESTING.md             # Backtest engine architecture + strategy tuning log
+└── CLAUDE.md                  # Project instructions used by Claude Code while building this
 ```
+
+| Repo | Contents |
+|---|---|
+| [`revolut-trading-bot-X`](.) (this repo) | Java backend, docs |
+| [`revolut-bot-ui`](https://github.com/Ogstef/revolut-bot-ui) | React 19 / TypeScript dashboard |
+| [`reddit-crypto-scraper`](https://github.com/Ogstef/reddit-crypto-scraper) | Python sentiment scraper microservice |
 
 ---
 
