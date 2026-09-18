@@ -57,7 +57,7 @@ All trading is simulated. Fee and slippage costs are modelled:
 - Slippage: 0.05% per side (`trading.costs.slippage-rate: 0.0005`)
 - `net_pnl` = gross PnL − entry fee − entry slippage − exit fee − exit slippage
 
-No live order placement exists yet. See `future plans/plans.md` for the live trading roadmap.
+No live order placement exists yet. See `docs/future-plans/plans.md` for the live trading roadmap.
 
 ---
 
